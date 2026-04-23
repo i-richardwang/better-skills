@@ -253,19 +253,26 @@ def plan_runs(
     baseline_mode: str,
     snapshot_path: Path | None,
     default_timeout: int,
+    runs_per_config: int,
 ) -> list[dict]:
-    """Expand evals into per-run specs. Writes eval_metadata.json into each eval dir."""
+    """Expand evals into per-run specs. Writes eval_metadata.json into each eval dir.
+
+    Directory layout matches aggregate_benchmark.py expectations:
+      iteration-N/eval-<id>/<config>/run-<k>/{transcript.jsonl, timing.json, grading.json, outputs/}
+
+    Eval dirs are always `eval-<id>` (not user-chosen names) so the aggregator's
+    `eval-*` glob picks them up. Descriptive names live in eval_metadata.json.
+    """
     iteration_dir = workspace / f"iteration-{iteration}"
     runs = []
     for ev in evals:
         eval_id = ev["id"]
-        eval_name = ev.get("name") or f"eval-{eval_id}"
-        eval_dir = iteration_dir / eval_name
+        eval_dir = iteration_dir / f"eval-{eval_id}"
         eval_dir.mkdir(parents=True, exist_ok=True)
 
         metadata = {
             "eval_id": eval_id,
-            "eval_name": eval_name,
+            "eval_name": ev.get("name") or f"eval-{eval_id}",
             "prompt": ev["prompt"],
             "assertions": ev.get("expectations", []),
         }
@@ -273,36 +280,40 @@ def plan_runs(
 
         common = {
             "eval_id": eval_id,
-            "eval_name": eval_name,
+            "eval_name": metadata["eval_name"],
             "prompt": ev["prompt"],
             "files": ev.get("files", []),
             "expectations": ev.get("expectations", []),
             "timeout": ev.get("timeout", default_timeout),
         }
 
-        runs.append({
-            **common,
-            "variant": "with_skill",
-            "run_dir": eval_dir / "with_skill",
-            "skill_path": skill_path,
-        })
+        for k in range(1, runs_per_config + 1):
+            runs.append({
+                **common,
+                "variant": "with_skill",
+                "run_number": k,
+                "run_dir": eval_dir / "with_skill" / f"run-{k}",
+                "skill_path": skill_path,
+            })
 
-        if baseline_mode == "without_skill":
-            runs.append({
-                **common,
-                "variant": "without_skill",
-                "run_dir": eval_dir / "without_skill",
-                "skill_path": None,
-            })
-        elif baseline_mode == "old_skill":
-            runs.append({
-                **common,
-                "variant": "old_skill",
-                "run_dir": eval_dir / "old_skill",
-                "skill_path": snapshot_path,
-            })
-        else:
-            raise ValueError(f"Unknown baseline_mode: {baseline_mode}")
+            if baseline_mode == "without_skill":
+                runs.append({
+                    **common,
+                    "variant": "without_skill",
+                    "run_number": k,
+                    "run_dir": eval_dir / "without_skill" / f"run-{k}",
+                    "skill_path": None,
+                })
+            elif baseline_mode == "old_skill":
+                runs.append({
+                    **common,
+                    "variant": "old_skill",
+                    "run_number": k,
+                    "run_dir": eval_dir / "old_skill" / f"run-{k}",
+                    "skill_path": snapshot_path,
+                })
+            else:
+                raise ValueError(f"Unknown baseline_mode: {baseline_mode}")
 
     return runs
 
@@ -336,7 +347,7 @@ def run_phase_executor(
             timing = out.get("timing") or {}
             status = "OK" if out.get("exit_code") == 0 else f"FAIL exit={out.get('exit_code')}"
             print(
-                f"[exec {done}/{len(runs)}] {r['eval_name']}/{r['variant']} {status} "
+                f"[exec {done}/{len(runs)}] eval-{r['eval_id']}/{r['variant']}/run-{r['run_number']} {status} "
                 f"tokens={timing.get('total_tokens', 0)} "
                 f"dur={timing.get('total_duration_seconds', 0):.1f}s",
                 file=sys.stderr,
@@ -376,7 +387,7 @@ def run_phase_grader(
             gsum = out.get("grading_summary") or {}
             status = "OK" if out.get("exit_code") == 0 else f"FAIL exit={out.get('exit_code')}"
             print(
-                f"[grade {done}/{len(executor_results)}] {r['eval_name']}/{r['variant']} {status} "
+                f"[grade {done}/{len(executor_results)}] eval-{r['eval_id']}/{r['variant']}/run-{r['run_number']} {status} "
                 f"graded={gsum.get('passed', '?')}/{gsum.get('total', '?')}",
                 file=sys.stderr,
                 flush=True,
@@ -385,6 +396,7 @@ def run_phase_grader(
                 "eval_id": r["eval_id"],
                 "eval_name": r["eval_name"],
                 "variant": r["variant"],
+                "run_number": r["run_number"],
                 "run_dir": str(r["run_dir"]),
                 **out,
             })
@@ -396,6 +408,7 @@ def _serialize_executor_result(r: dict) -> dict:
         "eval_id": r["eval_id"],
         "eval_name": r["eval_name"],
         "variant": r["variant"],
+        "run_number": r["run_number"],
         "run_dir": str(r["run_dir"]),
         "skill_path": str(r["skill_path"]) if r["skill_path"] else None,
         "exit_code": r.get("exit_code"),
@@ -414,6 +427,8 @@ def main():
     parser.add_argument("--snapshot-path", default=None, help="Path to old-skill snapshot (required when baseline-mode=old_skill)")
     parser.add_argument("--num-workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--default-timeout", type=int, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--runs-per-config", type=int, default=1,
+                        help="Replicate each eval/config N times for variance analysis (default 1)")
     parser.add_argument("--model", default=None)
     parser.add_argument("--phase", choices=["all", "executor", "grader"], default="all",
                         help="'executor' only runs Step 1+3, 'grader' only runs Step 4 (expects existing transcripts).")
@@ -438,6 +453,7 @@ def main():
         baseline_mode=args.baseline_mode,
         snapshot_path=snapshot_path,
         default_timeout=args.default_timeout,
+        runs_per_config=args.runs_per_config,
     )
 
     print(f"[plan] {len(evals)} evals, {len(runs)} executor runs, phase={args.phase}", file=sys.stderr, flush=True)

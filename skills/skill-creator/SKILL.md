@@ -164,7 +164,26 @@ See `references/schemas.md` for the full schema (including the `assertions` fiel
 
 This section is one continuous sequence — don't stop partway through. Do NOT use `/skill-test` or any other testing skill.
 
-Put results in `<skill-name>-workspace/` as a sibling to the skill directory. Within the workspace, organize results by iteration (`iteration-1/`, `iteration-2/`, etc.) and within that, each test case gets a directory (`eval-0/`, `eval-1/`, etc.). Don't create all of this upfront — just create directories as you go.
+Put results in `<skill-name>-workspace/` as a sibling to the skill directory. Within the workspace, the runner script builds this layout (you don't need to create anything upfront — the script does it):
+
+```
+<skill-name>-workspace/
+└── iteration-<N>/
+    └── eval-<id>/
+        ├── eval_metadata.json          (regenerated from evals.json each run)
+        ├── with_skill/
+        │   └── run-<k>/
+        │       ├── transcript.jsonl
+        │       ├── stderr.log
+        │       ├── timing.json
+        │       ├── grading.json
+        │       ├── grader_transcript.jsonl
+        │       └── outputs/
+        └── <baseline>/                 (without_skill or old_skill)
+            └── run-<k>/ ...
+```
+
+The `eval-<id>` / `run-<k>` naming is what `aggregate_benchmark.py` expects — don't rename these.
 
 ### Step 1: Launch all runs (with-skill AND baseline) via the runner script
 
@@ -183,7 +202,7 @@ python -m scripts.run_functional_eval \
   --baseline-mode without_skill
 ```
 
-Run it **from the skill-creator directory** (so `python -m scripts.*` resolves). The script writes everything under `<workspace>/iteration-<N>/<eval-name>/{with_skill,<baseline>}/`.
+Run it **from the skill-creator directory** (so `python -m scripts.*` resolves). The layout the script builds is shown above.
 
 **Baseline modes:**
 - **Creating a new skill**: `--baseline-mode without_skill` (no skill in envelope). Baseline saves to `without_skill/`.
@@ -193,6 +212,7 @@ Run it **from the skill-creator directory** (so `python -m scripts.*` resolves).
 - `--model <id>` — override the executor/grader model (defaults to your configured Claude Code model)
 - `--num-workers N` — parallelism (default 4)
 - `--default-timeout SEC` — per-run ceiling (default 600); per-eval override via a `timeout` field in `evals.json`
+- `--runs-per-config N` — replicate each eval/config N times for variance analysis (default 1; functional evals are expensive, bump deliberately)
 - `--phase executor` / `--phase grader` — run only one phase. Use when you want to launch executors, draft assertions while they run, then grade separately
 
 **Crucial: do NOT read the run `transcript.jsonl` files into the main agent's context.** Stream-json emits every tool call and reasoning event — tens of thousands of tokens per run. The grader (also a subprocess) reads each transcript; the main agent should only look at the script's summary JSON and per-run `grading.json`.
@@ -212,7 +232,7 @@ Don't just wait for the runs to finish — you can use this time productively. D
 
 Good assertions are objectively verifiable and have descriptive names — they should read clearly in the benchmark viewer so someone glancing at the results immediately understands what each one checks. Subjective skills (writing style, design quality) are better evaluated qualitatively — don't force assertions onto things that need human judgment.
 
-Update the `eval_metadata.json` files and `evals/evals.json` with the assertions once drafted. Also explain to the user what they'll see in the viewer — both the qualitative outputs and the quantitative benchmark.
+Update `evals/evals.json` with the assertions once drafted (do NOT hand-edit the per-run `eval_metadata.json` files — they're regenerated from `evals.json` on every script invocation). Also explain to the user what they'll see in the viewer — both the qualitative outputs and the quantitative benchmark.
 
 ### Step 3: Timing data — captured by the runner script automatically
 
