@@ -26,37 +26,19 @@ Many skills in this repo are open source (Apache 2.0). We've also included the d
 - [./spec](./spec): The Agent Skills specification
 - [./template](./template): Skill template
 
-# Try in Claude Code, Claude.ai, and the API
+# Installation
 
-## Claude Code
-You can register this repository as a Claude Code Plugin marketplace by running the following command in Claude Code:
-```
-/plugin marketplace add anthropics/skills
-```
+Install via [skills.sh](https://skills.sh) CLI:
 
-Then, to install a specific set of skills:
-1. Select `Browse and install plugins`
-2. Select `anthropic-agent-skills`
-3. Select `document-skills` or `example-skills`
-4. Select `Install now`
-
-Alternatively, directly install either Plugin via:
-```
-/plugin install document-skills@anthropic-agent-skills
-/plugin install example-skills@anthropic-agent-skills
+```bash
+npx skills add i-richardwang/skill-creator
 ```
 
-After installing the plugin, you can use the skill by just mentioning it. For instance, if you install the `document-skills` plugin from the marketplace, you can ask Claude Code to do something like: "Use the PDF skill to extract the form fields from `path/to/some-file.pdf`"
+Install globally:
 
-## Claude.ai
-
-These example skills are all already available to paid plans in Claude.ai. 
-
-To use any skill from this repository or upload custom skills, follow the instructions in [Using skills in Claude](https://support.claude.com/en/articles/12512180-using-skills-in-claude#h_a4222fa77b).
-
-## Claude API
-
-You can use Anthropic's pre-built skills, and upload custom skills, via the Claude API. See the [Skills API Quickstart](https://docs.claude.com/en/api/skills-guide#creating-a-skill) for more.
+```bash
+npx skills add i-richardwang/skill-creator -g
+```
 
 # Creating a Basic Skill
 
