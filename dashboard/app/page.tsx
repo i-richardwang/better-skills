@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getPortfolioStats, listSkills } from "@/lib/queries";
 import { fmtInt, fmtPct, fmtRelative } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import {
   Card,
   CardBody,
@@ -75,13 +76,13 @@ function KpiStrip({
       {items.map((it, i) => (
         <div
           key={it.label}
-          className={
-            "px-5 py-4 " +
-            (i < items.length - 1
-              ? "border-border border-b md:border-r md:border-b-0 "
-              : "") +
-            (i === 1 ? "border-border border-b md:border-b-0 " : "")
-          }
+          className={cn(
+            "px-5 py-4",
+            // mobile (2-col): bottom border on the top row only (first 2 items)
+            i < 2 && "border-border border-b md:border-b-0",
+            // desktop (4-col): right border on all but the last
+            i < items.length - 1 && "md:border-border md:border-r",
+          )}
         >
           <div className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
             {it.label}
