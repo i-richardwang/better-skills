@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getSkillTrajectory } from "@/lib/queries";
+import {
+  getSkillTrajectory,
+  getSkillPerEvalTrajectory,
+} from "@/lib/queries";
 import type { IterationPoint } from "@/lib/queries";
 import {
   fmtDateTime,
@@ -25,6 +28,7 @@ import {
   TrajectoryChartClient,
   type TrajectoryDatum,
 } from "@/components/trajectory-chart-client";
+import { PerEvalTrajectoryGridClient } from "@/components/per-eval-trajectory-client";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +39,10 @@ export default async function SkillPage({
 }) {
   const { name: rawName } = await params;
   const name = decodeURIComponent(rawName);
-  const skill = await getSkillTrajectory(name);
+  const [skill, perEval] = await Promise.all([
+    getSkillTrajectory(name),
+    getSkillPerEvalTrajectory(name),
+  ]);
   if (!skill) notFound();
 
   const points = skill.points;
@@ -106,6 +113,21 @@ export default async function SkillPage({
           </CardBody>
         </Card>
       </section>
+
+      {perEval.length > 0 ? (
+        <section className="space-y-4">
+          <header className="border-border flex items-baseline justify-between border-b pb-3">
+            <h2 className="font-heading text-xl tracking-tight">
+              Per-eval trajectories
+            </h2>
+            <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
+              {perEval.length} eval{perEval.length === 1 ? "" : "s"} · mean
+              pass rate per configuration
+            </span>
+          </header>
+          <PerEvalTrajectoryGridClient items={perEval} />
+        </section>
+      ) : null}
 
       <section className="space-y-4">
         <header className="border-border flex items-baseline justify-between border-b pb-3">

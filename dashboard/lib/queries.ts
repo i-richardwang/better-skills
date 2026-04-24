@@ -131,6 +131,12 @@ export async function getSkillTrajectory(
   };
 }
 
+export type Expectation = {
+  text: string;
+  passed: boolean;
+  evidence: string | null;
+};
+
 export type RunRow = {
   id: number;
   evalId: number;
@@ -145,7 +151,27 @@ export type RunRow = {
   toolCalls: number | null;
   errors: number | null;
   notes: string[] | null;
+  expectations: Expectation[];
 };
+
+function extractExpectations(rawGrading: unknown): Expectation[] {
+  if (!rawGrading || typeof rawGrading !== "object") return [];
+  const exp = (rawGrading as { expectations?: unknown }).expectations;
+  if (!Array.isArray(exp)) return [];
+  return exp
+    .map((e): Expectation | null => {
+      if (!e || typeof e !== "object") return null;
+      const o = e as { text?: unknown; passed?: unknown; evidence?: unknown };
+      if (typeof o.text !== "string" || typeof o.passed !== "boolean")
+        return null;
+      return {
+        text: o.text,
+        passed: o.passed,
+        evidence: typeof o.evidence === "string" ? o.evidence : null,
+      };
+    })
+    .filter((e): e is Expectation => e !== null);
+}
 
 export type IterationDetail = {
   skillName: string;
@@ -235,6 +261,82 @@ export async function getIterationDetail(
       toolCalls: r.toolCalls,
       errors: r.errors,
       notes: r.notes,
+      expectations: extractExpectations(r.rawGrading),
     })),
   };
+}
+
+export type PerEvalPoint = {
+  iterationNumber: number;
+  withSkillMean: number | null;
+  withoutSkillMean: number | null;
+};
+
+export type PerEvalTrajectory = {
+  evalId: number;
+  evalName: string | null;
+  points: PerEvalPoint[];
+};
+
+export async function getSkillPerEvalTrajectory(
+  name: string,
+): Promise<PerEvalTrajectory[]> {
+  const [skill] = await db
+    .select()
+    .from(schema.skills)
+    .where(eq(schema.skills.name, name))
+    .limit(1);
+  if (!skill) return [];
+
+  const rows = await db.execute<{
+    iteration_number: number;
+    eval_id: number;
+    eval_name: string | null;
+    configuration: "with_skill" | "without_skill";
+    mean_pass_rate: string | null;
+  }>(sql`
+    SELECT
+      i.iteration_number,
+      r.eval_id,
+      MAX(r.eval_name) AS eval_name,
+      r.configuration,
+      AVG(r.pass_rate::float)::text AS mean_pass_rate
+    FROM ${schema.iterations} i
+    JOIN ${schema.runs} r ON r.iteration_id = i.id
+    WHERE i.skill_id = ${skill.id}
+    GROUP BY i.iteration_number, r.eval_id, r.configuration
+    ORDER BY r.eval_id, i.iteration_number
+  `);
+
+  const byEval = new Map<number, PerEvalTrajectory>();
+  for (const row of rows) {
+    if (!byEval.has(row.eval_id)) {
+      byEval.set(row.eval_id, {
+        evalId: row.eval_id,
+        evalName: row.eval_name,
+        points: [],
+      });
+    }
+    const trajectory = byEval.get(row.eval_id)!;
+    let point = trajectory.points.find(
+      (p) => p.iterationNumber === row.iteration_number,
+    );
+    if (!point) {
+      point = {
+        iterationNumber: row.iteration_number,
+        withSkillMean: null,
+        withoutSkillMean: null,
+      };
+      trajectory.points.push(point);
+    }
+    const v = row.mean_pass_rate === null ? null : Number(row.mean_pass_rate);
+    if (row.configuration === "with_skill") point.withSkillMean = v;
+    else point.withoutSkillMean = v;
+  }
+
+  for (const t of byEval.values()) {
+    t.points.sort((a, b) => a.iterationNumber - b.iterationNumber);
+  }
+
+  return [...byEval.values()].sort((a, b) => a.evalId - b.evalId);
 }

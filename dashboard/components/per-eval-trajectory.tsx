@@ -1,0 +1,197 @@
+"use client";
+
+import {
+  CartesianGrid,
+  LineChart,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+
+export type PerEvalPoint = {
+  iterationNumber: number;
+  withSkillMean: number | null;
+  withoutSkillMean: number | null;
+};
+
+export type PerEvalTrajectoryDatum = {
+  evalId: number;
+  evalName: string | null;
+  points: PerEvalPoint[];
+};
+
+const C_WITH = "oklch(0.62 0.14 150)";
+const C_WITHOUT = "oklch(0.60 0.11 55)";
+
+export function PerEvalTrajectorySparkline({
+  evalName,
+  evalId,
+  points,
+}: PerEvalTrajectoryDatum) {
+  if (points.length === 0) return null;
+
+  const latest = points[points.length - 1];
+  const first = points[0];
+  const delta =
+    latest?.withSkillMean !== null &&
+    latest?.withSkillMean !== undefined &&
+    first?.withSkillMean !== null &&
+    first?.withSkillMean !== undefined
+      ? latest.withSkillMean - first.withSkillMean
+      : null;
+
+  return (
+    <div className="border-border bg-card flex flex-col border">
+      <div className="border-border flex items-baseline justify-between gap-3 border-b px-4 py-3">
+        <div className="min-w-0">
+          <div className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
+            eval · #{evalId}
+          </div>
+          <div className="font-heading truncate text-base tracking-tight">
+            {evalName ?? `eval ${evalId}`}
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-0.5 font-mono tabular-nums">
+          <span className="text-xl font-medium">
+            {latest?.withSkillMean !== null && latest?.withSkillMean !== undefined
+              ? `${(latest.withSkillMean * 100).toFixed(0)}%`
+              : "—"}
+          </span>
+          {delta !== null ? (
+            <span
+              className={
+                "text-[10px] tracking-widest uppercase " +
+                (delta > 0
+                  ? "text-emerald-600 dark:text-emerald-300"
+                  : delta < 0
+                    ? "text-destructive"
+                    : "text-muted-foreground")
+              }
+            >
+              {delta > 0 ? "+" : ""}
+              {(delta * 100).toFixed(1)}pp
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div className="h-28 w-full px-1 py-1">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={points} margin={{ top: 6, right: 10, bottom: 0, left: -20 }}>
+            <CartesianGrid
+              stroke="var(--border)"
+              strokeDasharray="2 4"
+              vertical={false}
+            />
+            <XAxis
+              dataKey="iterationNumber"
+              type="number"
+              domain={["dataMin", "dataMax"]}
+              allowDecimals={false}
+              stroke="var(--muted-foreground)"
+              fontSize={9}
+              fontFamily="var(--font-mono)"
+              tickFormatter={(v) => `#${v}`}
+              tickLine={false}
+              axisLine={{ stroke: "var(--border)" }}
+              interval="preserveStartEnd"
+            />
+            <YAxis
+              domain={[0, 1]}
+              stroke="var(--muted-foreground)"
+              fontSize={9}
+              fontFamily="var(--font-mono)"
+              tickFormatter={(v) => `${Math.round(v * 100)}`}
+              tickLine={false}
+              axisLine={false}
+              ticks={[0, 0.5, 1]}
+              width={30}
+            />
+            <Tooltip content={<MiniTooltip />} cursor={{ stroke: "var(--border)" }} />
+            <Line
+              type="monotone"
+              dataKey="withoutSkillMean"
+              stroke={C_WITHOUT}
+              strokeWidth={1.25}
+              strokeDasharray="4 3"
+              dot={{ r: 2, fill: C_WITHOUT, strokeWidth: 0 }}
+              activeDot={{ r: 4, stroke: "var(--background)", strokeWidth: 1.5 }}
+              isAnimationActive={false}
+              connectNulls
+            />
+            <Line
+              type="monotone"
+              dataKey="withSkillMean"
+              stroke={C_WITH}
+              strokeWidth={1.75}
+              dot={{ r: 2.5, fill: C_WITH, strokeWidth: 0 }}
+              activeDot={{ r: 4.5, stroke: "var(--background)", strokeWidth: 1.5 }}
+              isAnimationActive={false}
+              connectNulls
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+type MiniTooltipProps = {
+  active?: boolean;
+  payload?: Array<{ payload?: PerEvalPoint }>;
+  label?: number;
+};
+
+function MiniTooltip({ active, payload, label }: MiniTooltipProps) {
+  if (!active || !payload || payload.length === 0) return null;
+  const d = payload[0]?.payload;
+  if (!d) return null;
+  const row = (name: string, v: number | null, color: string) => (
+    <div className="flex items-baseline justify-between gap-3 tabular-nums">
+      <span className="text-muted-foreground flex items-center gap-1.5 text-[10px] tracking-widest uppercase">
+        <span
+          aria-hidden
+          className="inline-block h-1.5 w-1.5"
+          style={{ background: color }}
+        />
+        {name}
+      </span>
+      <span className="font-mono">
+        {v === null ? "—" : `${(v * 100).toFixed(0)}%`}
+      </span>
+    </div>
+  );
+  return (
+    <div className="border-border bg-background min-w-40 border px-2.5 py-1.5 shadow-sm">
+      <div className="text-muted-foreground border-border mb-1 border-b pb-1 font-mono text-[10px] tracking-widest uppercase">
+        iter #{label}
+      </div>
+      <div className="space-y-0.5 text-xs">
+        {row("with", d.withSkillMean, C_WITH)}
+        {row("without", d.withoutSkillMean, C_WITHOUT)}
+      </div>
+    </div>
+  );
+}
+
+export function PerEvalTrajectoryGrid({
+  items,
+}: {
+  items: PerEvalTrajectoryDatum[];
+}) {
+  if (items.length === 0) {
+    return (
+      <div className="border-border text-muted-foreground flex h-28 items-center justify-center border border-dashed font-mono text-[10px] tracking-widest uppercase">
+        No per-eval data yet
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {items.map((ev) => (
+        <PerEvalTrajectorySparkline key={ev.evalId} {...ev} />
+      ))}
+    </div>
+  );
+}

@@ -20,14 +20,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-} from "@/components/ui/table";
+import type { Expectation } from "@/lib/queries";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -327,6 +321,9 @@ function evalBucketMean(runs: RunRow[]): number | null {
   return rates.reduce((a, b) => a + b, 0) / rates.length;
 }
 
+const RUN_GRID =
+  "grid grid-cols-[5.5rem_2.75rem_3.5rem_4.5rem_3.75rem_3.75rem_3rem_2.75rem_1rem] items-center gap-3";
+
 function EvalGroup({ group }: { group: EvalBucket }) {
   const withMean = evalBucketMean(group.withSkill);
   const withoutMean = evalBucketMean(group.withoutSkill);
@@ -362,62 +359,152 @@ function EvalGroup({ group }: { group: EvalBucket }) {
           ) : null}
         </div>
       </CardHeader>
-      <Table>
-        <TableHead>
-          <tr>
-            <TableHeaderCell>Config</TableHeaderCell>
-            <TableHeaderCell>Run</TableHeaderCell>
-            <TableHeaderCell>Pass</TableHeaderCell>
-            <TableHeaderCell>Passed / Total</TableHeaderCell>
-            <TableHeaderCell>Tokens</TableHeaderCell>
-            <TableHeaderCell>Time</TableHeaderCell>
-            <TableHeaderCell>Tools</TableHeaderCell>
-            <TableHeaderCell>Errors</TableHeaderCell>
-          </tr>
-        </TableHead>
-        <TableBody>
+
+      <div className="overflow-x-auto">
+        <div className="min-w-[44rem]">
+          <div
+            className={cn(
+              RUN_GRID,
+              "text-muted-foreground border-border border-b px-4 py-2.5 font-mono text-[10px] tracking-widest uppercase",
+            )}
+          >
+            <span>Config</span>
+            <span>Run</span>
+            <span>Pass</span>
+            <span>Passed/Total</span>
+            <span>Tokens</span>
+            <span>Time</span>
+            <span>Tools</span>
+            <span>Errors</span>
+            <span aria-hidden />
+          </div>
+
           {rows.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell>
-                <Badge
-                  variant={
-                    r.configuration === "with_skill" ? "outline" : "muted"
-                  }
-                >
-                  {r.configuration === "with_skill" ? "with" : "without"}
-                </Badge>
-              </TableCell>
-              <TableCell className="font-mono tabular-nums">
-                #{r.runNumber}
-              </TableCell>
-              <TableCell className="font-mono font-medium tabular-nums">
-                {fmtPct(r.passRate)}
-              </TableCell>
-              <TableCell className="text-muted-foreground font-mono tabular-nums">
-                {r.passed ?? "—"} / {r.total ?? "—"}
-              </TableCell>
-              <TableCell className="text-muted-foreground font-mono tabular-nums">
-                {fmtTokens(r.tokens)}
-              </TableCell>
-              <TableCell className="text-muted-foreground font-mono tabular-nums">
-                {fmtSeconds(r.timeSeconds)}
-              </TableCell>
-              <TableCell className="text-muted-foreground font-mono tabular-nums">
-                {fmtInt(r.toolCalls)}
-              </TableCell>
-              <TableCell className="font-mono tabular-nums">
-                {r.errors !== null && r.errors > 0 ? (
-                  <span className="text-destructive">{r.errors}</span>
-                ) : (
-                  <span className="text-muted-foreground">
-                    {r.errors ?? "—"}
-                  </span>
-                )}
-              </TableCell>
-            </TableRow>
+            <RunRowDetails key={r.id} run={r} />
           ))}
-        </TableBody>
-      </Table>
+        </div>
+      </div>
     </Card>
+  );
+}
+
+function RunRowDetails({ run: r }: { run: RunRow }) {
+  const hasExpectations = r.expectations.length > 0;
+  const passedCount = r.expectations.filter((e) => e.passed).length;
+  return (
+    <details
+      className={cn(
+        "border-border group border-b last:border-b-0",
+        hasExpectations
+          ? "[&:not([open])]:hover:bg-muted/40"
+          : "[&>summary]:cursor-default",
+      )}
+    >
+      <summary
+        className={cn(
+          RUN_GRID,
+          "list-none px-4 py-2.5 text-sm transition-colors",
+          "[&::-webkit-details-marker]:hidden",
+          hasExpectations
+            ? "cursor-pointer group-open:bg-muted/60"
+            : "",
+        )}
+      >
+        <span>
+          <Badge
+            variant={r.configuration === "with_skill" ? "outline" : "muted"}
+          >
+            {r.configuration === "with_skill" ? "with" : "without"}
+          </Badge>
+        </span>
+        <span className="font-mono tabular-nums">#{r.runNumber}</span>
+        <span className="font-mono font-medium tabular-nums">
+          {fmtPct(r.passRate)}
+        </span>
+        <span className="text-muted-foreground font-mono tabular-nums">
+          {r.passed ?? "—"} / {r.total ?? "—"}
+        </span>
+        <span className="text-muted-foreground font-mono tabular-nums">
+          {fmtTokens(r.tokens)}
+        </span>
+        <span className="text-muted-foreground font-mono tabular-nums">
+          {fmtSeconds(r.timeSeconds)}
+        </span>
+        <span className="text-muted-foreground font-mono tabular-nums">
+          {fmtInt(r.toolCalls)}
+        </span>
+        <span className="font-mono tabular-nums">
+          {r.errors !== null && r.errors > 0 ? (
+            <span className="text-destructive">{r.errors}</span>
+          ) : (
+            <span className="text-muted-foreground">{r.errors ?? "—"}</span>
+          )}
+        </span>
+        <span
+          aria-hidden
+          className={cn(
+            "text-muted-foreground justify-self-end font-mono text-xs transition-transform",
+            hasExpectations
+              ? "group-open:rotate-90"
+              : "opacity-20",
+          )}
+        >
+          ›
+        </span>
+      </summary>
+
+      {hasExpectations ? (
+        <div className="bg-muted/30 border-border border-t px-4 py-3">
+          <div className="text-muted-foreground mb-2 flex items-baseline justify-between font-mono text-[10px] tracking-widest uppercase">
+            <span>Expectations</span>
+            <span className="tabular-nums">
+              {passedCount} / {r.expectations.length} passed
+            </span>
+          </div>
+          <ul className="space-y-1.5">
+            {r.expectations.map((e, i) => (
+              <ExpectationRow key={i} expectation={e} />
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </details>
+  );
+}
+
+function ExpectationRow({ expectation }: { expectation: Expectation }) {
+  const { passed, text, evidence } = expectation;
+  return (
+    <li className="flex items-start gap-2.5">
+      <span
+        aria-hidden
+        className={cn(
+          "mt-[0.3rem] inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center font-mono text-[10px] leading-none",
+          passed
+            ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+            : "bg-destructive/15 text-destructive",
+        )}
+      >
+        {passed ? "✓" : "✗"}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "text-sm leading-snug",
+            passed ? "" : "text-destructive font-medium",
+          )}
+        >
+          {text}
+        </div>
+        {evidence ? (
+          <div className="text-muted-foreground mt-0.5 text-xs leading-snug">
+            <span className="font-mono text-[10px] tracking-widest uppercase">
+              evidence ·{" "}
+            </span>
+            {evidence}
+          </div>
+        ) : null}
+      </div>
+    </li>
   );
 }
