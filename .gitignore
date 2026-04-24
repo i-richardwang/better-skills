@@ -3,3 +3,9 @@ __pycache__/
 .idea/
 .vscode/
 
+# local agent / tooling state
+.agents/
+.claude/
+.factory/
+skills-lock.json
+
