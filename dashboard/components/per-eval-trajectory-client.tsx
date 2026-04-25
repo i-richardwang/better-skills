@@ -18,10 +18,12 @@ const PerEvalTrajectoryGrid = dynamic(
 
 export function PerEvalTrajectoryGridClient({
   items,
+  skillName,
 }: {
   items: PerEvalTrajectoryDatum[];
+  skillName?: string;
 }) {
-  return <PerEvalTrajectoryGrid items={items} />;
+  return <PerEvalTrajectoryGrid items={items} skillName={skillName} />;
 }
 
 export type { PerEvalTrajectoryDatum };

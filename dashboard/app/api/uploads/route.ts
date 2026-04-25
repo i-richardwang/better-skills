@@ -23,6 +23,7 @@ const bodySchema = z.object({
   skill_md: z.string().optional(),
   git_commit_sha: z.string().optional(),
   hostname: z.string().optional(),
+  evals_definition: z.array(z.any()).optional(),
 });
 
 type Body = z.infer<typeof bodySchema>;
@@ -125,6 +126,7 @@ export async function POST(request: Request) {
     skill_md,
     git_commit_sha,
     hostname,
+    evals_definition,
   } = parsed;
 
   const iterSummary = extractIterationSummary(benchmark);
@@ -153,6 +155,7 @@ export async function POST(request: Request) {
         gitCommitSha: git_commit_sha ?? null,
         hostname: hostname ?? null,
         rawBenchmark: benchmark,
+        evalsDefinition: evals_definition ?? null,
       };
 
       const [iterationRow] = await tx
@@ -166,6 +169,7 @@ export async function POST(request: Request) {
             gitCommitSha: git_commit_sha ?? null,
             hostname: hostname ?? null,
             rawBenchmark: benchmark,
+            evalsDefinition: evals_definition ?? null,
             uploadedAt: sql`now()`,
           },
         })

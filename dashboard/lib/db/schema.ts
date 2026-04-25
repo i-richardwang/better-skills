@@ -74,6 +74,7 @@ export const iterations = pgTable(
     hostname: text("hostname"),
 
     rawBenchmark: jsonb("raw_benchmark").notNull(),
+    evalsDefinition: jsonb("evals_definition"),
 
     uploadedAt: timestamp("uploaded_at", { withTimezone: true })
       .notNull()

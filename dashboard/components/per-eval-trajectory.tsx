@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   CartesianGrid,
   LineChart,
@@ -29,7 +30,8 @@ export function PerEvalTrajectorySparkline({
   evalName,
   evalId,
   points,
-}: PerEvalTrajectoryDatum) {
+  skillName,
+}: PerEvalTrajectoryDatum & { skillName?: string }) {
   if (points.length === 0) return null;
 
   const latest = points[points.length - 1];
@@ -42,8 +44,8 @@ export function PerEvalTrajectorySparkline({
       ? latest.withSkillMean - first.withSkillMean
       : null;
 
-  return (
-    <div className="border-border bg-card flex flex-col border">
+  const tile = (
+    <div className="border-border bg-card hover:border-foreground/40 flex h-full flex-col border transition-colors">
       <div className="border-border flex items-baseline justify-between gap-3 border-b px-4 py-3">
         <div className="min-w-0">
           <div className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
@@ -135,6 +137,18 @@ export function PerEvalTrajectorySparkline({
       </div>
     </div>
   );
+
+  if (skillName) {
+    return (
+      <Link
+        href={`/skills/${encodeURIComponent(skillName)}/evals/${evalId}`}
+        className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/40"
+      >
+        {tile}
+      </Link>
+    );
+  }
+  return tile;
 }
 
 type MiniTooltipProps = {
@@ -177,8 +191,10 @@ function MiniTooltip({ active, payload, label }: MiniTooltipProps) {
 
 export function PerEvalTrajectoryGrid({
   items,
+  skillName,
 }: {
   items: PerEvalTrajectoryDatum[];
+  skillName?: string;
 }) {
   if (items.length === 0) {
     return (
@@ -190,7 +206,11 @@ export function PerEvalTrajectoryGrid({
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {items.map((ev) => (
-        <PerEvalTrajectorySparkline key={ev.evalId} {...ev} />
+        <PerEvalTrajectorySparkline
+          key={ev.evalId}
+          {...ev}
+          skillName={skillName}
+        />
       ))}
     </div>
   );

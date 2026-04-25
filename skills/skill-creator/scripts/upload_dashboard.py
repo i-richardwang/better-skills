@@ -106,6 +106,20 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
     return runs
 
 
+def _read_evals_definition(skill_path: Path) -> Optional[list]:
+    """Read evals.json's `evals` array (if present) for upload as iteration snapshot.
+    Returns None on any failure; upload still proceeds without the field."""
+    evals_path = skill_path / "evals" / "evals.json"
+    if not evals_path.exists():
+        return None
+    try:
+        data = json.loads(evals_path.read_text())
+    except Exception:
+        return None
+    evals = data.get("evals") if isinstance(data, dict) else None
+    return evals if isinstance(evals, list) else None
+
+
 def build_payload(
     benchmark_dir: Path,
     skill_name: str,
@@ -136,6 +150,9 @@ def build_payload(
         sha = _get_git_sha(skill_path)
         if sha:
             payload["git_commit_sha"] = sha
+        evals_def = _read_evals_definition(skill_path)
+        if evals_def is not None:
+            payload["evals_definition"] = evals_def
 
     return payload
 

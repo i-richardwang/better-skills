@@ -1,0 +1,630 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { getSkillEvalDetail } from "@/lib/queries";
+import type {
+  EvalIterationResult,
+  EvalRunResult,
+  Expectation,
+} from "@/lib/queries";
+import {
+  fmtDateTime,
+  fmtDelta,
+  fmtInt,
+  fmtPct,
+  fmtRelative,
+  fmtSeconds,
+  fmtTokens,
+  shortSha,
+} from "@/lib/format";
+import { Card, CardBody } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  TrajectoryChartClient,
+  type TrajectoryDatum,
+} from "@/components/trajectory-chart-client";
+import { cn } from "@/lib/utils";
+
+export const dynamic = "force-dynamic";
+
+export default async function EvalDetailPage({
+  params,
+}: {
+  params: Promise<{ name: string; id: string }>;
+}) {
+  const { name: rawName, id: rawId } = await params;
+  const name = decodeURIComponent(rawName);
+  const evalId = parseInt(rawId, 10);
+  if (Number.isNaN(evalId)) notFound();
+
+  const detail = await getSkillEvalDetail(name, evalId);
+  if (!detail) notFound();
+
+  const trajectoryData: TrajectoryDatum[] = detail.trajectory.map((p) => ({
+    iteration: p.iterationNumber,
+    withSkill: p.withSkillMean,
+    withSkillBandLow: null,
+    withSkillBandHigh: null,
+    withoutSkill: p.withoutSkillMean,
+    withoutSkillBandLow: null,
+    withoutSkillBandHigh: null,
+  }));
+
+  const latest = detail.trajectory[detail.trajectory.length - 1] ?? null;
+  const first = detail.trajectory[0] ?? null;
+  const latestDelta =
+    latest &&
+    latest.withSkillMean !== null &&
+    latest.withoutSkillMean !== null
+      ? latest.withSkillMean - latest.withoutSkillMean
+      : null;
+  const lifetimeDelta =
+    latest &&
+    first &&
+    latest.withSkillMean !== null &&
+    first.withSkillMean !== null
+      ? latest.withSkillMean - first.withSkillMean
+      : null;
+
+  const evalLabel = detail.evalName ?? `eval ${detail.evalId}`;
+
+  // Canonical expectation list — prefer definition; fall back to first run's
+  // expectation texts if definition isn't uploaded.
+  const canonicalExpectations: string[] =
+    detail.definition?.expectations ??
+    inferExpectationTextsFromIterations(detail.iterations);
+
+  return (
+    <div className="space-y-12">
+      <header className="space-y-4">
+        <nav className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
+          <Link href="/" className="hover:text-foreground">
+            Portfolio
+          </Link>
+          <span className="mx-2">/</span>
+          <Link
+            href={`/skills/${encodeURIComponent(name)}`}
+            className="hover:text-foreground"
+          >
+            {name}
+          </Link>
+          <span className="mx-2">/</span>
+          <span className="text-foreground">eval #{detail.evalId}</span>
+        </nav>
+        <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+          <h1 className="font-heading text-4xl leading-[1.05] tracking-tight md:text-5xl">
+            {evalLabel}
+          </h1>
+          <span className="text-muted-foreground font-mono text-sm tabular-nums">
+            #{detail.evalId}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline">
+            {detail.iterations.length} iteration
+            {detail.iterations.length === 1 ? "" : "s"}
+          </Badge>
+          {latest?.withSkillMean !== null &&
+          latest?.withSkillMean !== undefined ? (
+            <Badge variant="muted">
+              latest w/ {fmtPct(latest.withSkillMean)}
+            </Badge>
+          ) : null}
+          {latestDelta !== null ? (
+            <Badge
+              variant={
+                latestDelta > 0
+                  ? "positive"
+                  : latestDelta < 0
+                    ? "negative"
+                    : "muted"
+              }
+            >
+              vs without {fmtDelta(latestDelta)}
+            </Badge>
+          ) : null}
+          {lifetimeDelta !== null ? (
+            <Badge
+              variant={
+                lifetimeDelta > 0
+                  ? "positive"
+                  : lifetimeDelta < 0
+                    ? "negative"
+                    : "muted"
+              }
+            >
+              lifetime {fmtDelta(lifetimeDelta)}
+            </Badge>
+          ) : null}
+        </div>
+      </header>
+
+      <TaskSection
+        prompt={detail.definition?.prompt ?? null}
+        expectedOutput={detail.definition?.expectedOutput ?? null}
+        files={detail.definition?.files ?? null}
+        expectations={canonicalExpectations}
+      />
+
+      <section className="space-y-4">
+        <SectionHeading
+          title="Pass-rate trajectory"
+          subtitle="this eval, across iterations"
+        />
+        <Card>
+          <CardBody className="px-2 py-2">
+            {trajectoryData.length === 0 ? (
+              <div className="text-muted-foreground flex h-80 items-center justify-center font-mono text-[10px] tracking-widest uppercase">
+                no data
+              </div>
+            ) : (
+              <TrajectoryChartClient data={trajectoryData} />
+            )}
+          </CardBody>
+        </Card>
+      </section>
+
+      <section className="space-y-6">
+        <SectionHeading
+          title="Iteration results"
+          subtitle={`${detail.iterations.length} run${detail.iterations.length === 1 ? "" : "s"} · newest first`}
+        />
+        <div className="space-y-6">
+          {detail.iterations.map((it) => (
+            <IterationResult
+              key={it.iterationId}
+              iteration={it}
+              expectationTexts={canonicalExpectations}
+              skillName={name}
+            />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function inferExpectationTextsFromIterations(
+  iters: EvalIterationResult[],
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of iters) {
+    for (const r of [...it.withSkillRuns, ...it.withoutSkillRuns]) {
+      for (const e of r.expectations) {
+        if (!seen.has(e.text)) {
+          seen.add(e.text);
+          out.push(e.text);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function SectionHeading({
+  title,
+  subtitle,
+}: {
+  title: string;
+  subtitle?: string;
+}) {
+  return (
+    <header className="border-border flex items-baseline justify-between border-b pb-3">
+      <h2 className="font-heading text-xl tracking-tight">{title}</h2>
+      {subtitle ? (
+        <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
+          {subtitle}
+        </span>
+      ) : null}
+    </header>
+  );
+}
+
+function TaskSection({
+  prompt,
+  expectedOutput,
+  files,
+  expectations,
+}: {
+  prompt: string | null;
+  expectedOutput: string | null;
+  files: string[] | null;
+  expectations: string[];
+}) {
+  const hasContent =
+    !!prompt ||
+    !!expectedOutput ||
+    (files && files.length > 0) ||
+    expectations.length > 0;
+
+  return (
+    <section className="space-y-4">
+      <SectionHeading title="Task" subtitle="what the agent is asked to do" />
+      {!hasContent ? (
+        <Card>
+          <CardBody className="text-muted-foreground text-sm">
+            No task definition uploaded for this eval. Upload the skill&apos;s{" "}
+            <code className="font-mono text-xs">evals/evals.json</code> with
+            the{" "}
+            <code className="font-mono text-xs">--skill-path</code> flag to see
+            prompt and expected output here.
+          </CardBody>
+        </Card>
+      ) : (
+        <Card>
+          <CardBody className="space-y-6">
+            {prompt ? (
+              <Field label="Prompt">
+                <pre className="bg-muted/40 border-border overflow-auto border-l-2 px-4 py-3 font-mono text-[13px] leading-relaxed whitespace-pre-wrap">
+                  {prompt}
+                </pre>
+              </Field>
+            ) : null}
+            {expectedOutput ? (
+              <Field label="Expected output">
+                <p className="text-sm leading-relaxed">{expectedOutput}</p>
+              </Field>
+            ) : null}
+            {files && files.length > 0 ? (
+              <Field label="Input files">
+                <ul className="space-y-0.5 font-mono text-xs">
+                  {files.map((f, i) => (
+                    <li key={i} className="text-muted-foreground">
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+              </Field>
+            ) : null}
+            {expectations.length > 0 ? (
+              <Field label="Expectations">
+                <ul className="space-y-1 text-sm">
+                  {expectations.map((e, i) => (
+                    <li key={i} className="flex gap-2.5">
+                      <span className="text-muted-foreground font-mono text-[10px] leading-5 tabular-nums">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <span className="leading-snug">{e}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Field>
+            ) : null}
+          </CardBody>
+        </Card>
+      )}
+    </section>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="text-muted-foreground mb-2 font-mono text-[10px] tracking-widest uppercase">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function IterationResult({
+  iteration,
+  expectationTexts,
+  skillName,
+}: {
+  iteration: EvalIterationResult;
+  expectationTexts: string[];
+  skillName: string;
+}) {
+  const withMean = mean(iteration.withSkillRuns.map((r) => r.passRate));
+  const withoutMean = mean(iteration.withoutSkillRuns.map((r) => r.passRate));
+  const delta =
+    withMean !== null && withoutMean !== null ? withMean - withoutMean : null;
+
+  return (
+    <Card>
+      <header className="border-border flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 border-b px-5 py-4">
+        <div className="flex items-baseline gap-3">
+          <Link
+            href={`/skills/${encodeURIComponent(skillName)}/iterations/${iteration.iterationNumber}`}
+            className="font-heading text-lg tracking-tight hover:underline"
+          >
+            iteration #{iteration.iterationNumber}
+          </Link>
+          {iteration.gitCommitSha ? (
+            <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
+              {shortSha(iteration.gitCommitSha)}
+            </span>
+          ) : null}
+          <span
+            className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase"
+            title={fmtDateTime(iteration.uploadedAt)}
+          >
+            {fmtRelative(iteration.uploadedAt)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
+          <span className="text-muted-foreground">
+            w/ {fmtPct(withMean)} · w/o {fmtPct(withoutMean)}
+          </span>
+          {delta !== null ? (
+            <Badge
+              variant={
+                delta > 0 ? "positive" : delta < 0 ? "negative" : "muted"
+              }
+            >
+              {fmtDelta(delta)}
+            </Badge>
+          ) : null}
+        </div>
+      </header>
+
+      {expectationTexts.length > 0 ? (
+        <div className="border-border border-b">
+          <div className="text-muted-foreground border-border grid grid-cols-[1fr_8rem_8rem] items-baseline gap-3 border-b px-5 py-2.5 font-mono text-[10px] tracking-widest uppercase">
+            <span>Expectations</span>
+            <span className="text-right">with_skill</span>
+            <span className="text-right">without_skill</span>
+          </div>
+          <ul>
+            {expectationTexts.map((text, i) => (
+              <ExpectationCompareRow
+                key={i}
+                text={text}
+                withRuns={iteration.withSkillRuns}
+                withoutRuns={iteration.withoutSkillRuns}
+              />
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div>
+        <div className="text-muted-foreground border-border grid grid-cols-[2.5rem_1fr_1fr] items-baseline gap-3 border-b px-5 py-2.5 font-mono text-[10px] tracking-widest uppercase">
+          <span>Run</span>
+          <span>with_skill</span>
+          <span>without_skill</span>
+        </div>
+        <RunPairs
+          withRuns={iteration.withSkillRuns}
+          withoutRuns={iteration.withoutSkillRuns}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function mean(values: (number | null)[]): number | null {
+  const v = values.filter((x): x is number => x !== null);
+  if (v.length === 0) return null;
+  return v.reduce((a, b) => a + b, 0) / v.length;
+}
+
+function ExpectationCompareRow({
+  text,
+  withRuns,
+  withoutRuns,
+}: {
+  text: string;
+  withRuns: EvalRunResult[];
+  withoutRuns: EvalRunResult[];
+}) {
+  const withTally = tallyExpectation(text, withRuns);
+  const withoutTally = tallyExpectation(text, withoutRuns);
+
+  return (
+    <li className="border-border grid grid-cols-[1fr_8rem_8rem] items-center gap-3 border-b px-5 py-2.5 last:border-b-0">
+      <span className="pr-2 text-sm leading-snug">{text}</span>
+      <TallyCell tally={withTally} variant="with" />
+      <TallyCell tally={withoutTally} variant="without" />
+    </li>
+  );
+}
+
+type Tally = { passed: number; total: number };
+
+function tallyExpectation(text: string, runs: EvalRunResult[]): Tally {
+  let passed = 0;
+  let total = 0;
+  for (const run of runs) {
+    const match = run.expectations.find((e) => e.text === text);
+    if (!match) continue;
+    total += 1;
+    if (match.passed) passed += 1;
+  }
+  return { passed, total };
+}
+
+function TallyCell({
+  tally,
+  variant,
+}: {
+  tally: Tally;
+  variant: "with" | "without";
+}) {
+  const { passed, total } = tally;
+  if (total === 0) {
+    return (
+      <span className="text-muted-foreground justify-self-end font-mono text-xs">
+        —
+      </span>
+    );
+  }
+
+  const cells: ("pass" | "fail")[] = [];
+  for (let i = 0; i < total; i++) {
+    cells.push(i < passed ? "pass" : "fail");
+  }
+
+  const passColor =
+    variant === "with"
+      ? "bg-emerald-500/80 dark:bg-emerald-400/80"
+      : "bg-amber-600/70 dark:bg-amber-300/70";
+  const failColor = "bg-muted-foreground/15";
+
+  return (
+    <span className="flex items-center justify-end gap-2">
+      <span className="flex gap-0.5">
+        {cells.map((c, i) => (
+          <span
+            key={i}
+            aria-hidden
+            className={cn(
+              "h-3 w-3 shrink-0",
+              c === "pass" ? passColor : failColor,
+            )}
+          />
+        ))}
+      </span>
+      <span className="font-mono text-xs tabular-nums">
+        {passed}/{total}
+      </span>
+    </span>
+  );
+}
+
+function RunPairs({
+  withRuns,
+  withoutRuns,
+}: {
+  withRuns: EvalRunResult[];
+  withoutRuns: EvalRunResult[];
+}) {
+  const runNumbers = new Set<number>();
+  for (const r of withRuns) runNumbers.add(r.runNumber);
+  for (const r of withoutRuns) runNumbers.add(r.runNumber);
+  const sorted = [...runNumbers].sort((a, b) => a - b);
+
+  return (
+    <ul>
+      {sorted.map((n) => {
+        const w = withRuns.find((r) => r.runNumber === n) ?? null;
+        const wo = withoutRuns.find((r) => r.runNumber === n) ?? null;
+        return <RunPairRow key={n} runNumber={n} withRun={w} withoutRun={wo} />;
+      })}
+    </ul>
+  );
+}
+
+function RunPairRow({
+  runNumber,
+  withRun,
+  withoutRun,
+}: {
+  runNumber: number;
+  withRun: EvalRunResult | null;
+  withoutRun: EvalRunResult | null;
+}) {
+  const failedExp = (run: EvalRunResult | null): Expectation[] =>
+    run ? run.expectations.filter((e) => !e.passed) : [];
+
+  const withFailed = failedExp(withRun);
+  const withoutFailed = failedExp(withoutRun);
+  const hasDetails = withFailed.length > 0 || withoutFailed.length > 0;
+
+  return (
+    <li className="border-border border-b last:border-b-0">
+      <details className="group">
+        <summary
+          className={cn(
+            "grid grid-cols-[2.5rem_1fr_1fr] items-baseline gap-3 px-5 py-2.5 text-sm",
+            "list-none [&::-webkit-details-marker]:hidden",
+            hasDetails ? "hover:bg-muted/40 cursor-pointer" : "cursor-default",
+          )}
+        >
+          <span className="font-mono tabular-nums">
+            #{runNumber}
+            {hasDetails ? (
+              <span
+                aria-hidden
+                className="text-muted-foreground ml-1 inline-block transition-transform group-open:rotate-90"
+              >
+                ›
+              </span>
+            ) : null}
+          </span>
+          <RunMetricCell run={withRun} />
+          <RunMetricCell run={withoutRun} />
+        </summary>
+        {hasDetails ? (
+          <div className="bg-muted/20 border-border grid grid-cols-[2.5rem_1fr_1fr] gap-3 border-t px-5 py-3">
+            <span aria-hidden />
+            <FailureList runFailed={withFailed} variant="with" />
+            <FailureList runFailed={withoutFailed} variant="without" />
+          </div>
+        ) : null}
+      </details>
+    </li>
+  );
+}
+
+function RunMetricCell({ run }: { run: EvalRunResult | null }) {
+  if (!run) {
+    return <span className="text-muted-foreground font-mono text-xs">—</span>;
+  }
+  return (
+    <div className="space-y-0.5 font-mono text-xs tabular-nums">
+      <div>
+        <span className="font-medium">{fmtPct(run.passRate)}</span>
+        <span className="text-muted-foreground ml-1.5">
+          ({run.passed ?? "—"}/{run.total ?? "—"})
+        </span>
+      </div>
+      <div className="text-muted-foreground">
+        {fmtTokens(run.tokens)} · {fmtSeconds(run.timeSeconds)} · {fmtInt(run.toolCalls)} tools
+        {run.errors !== null && run.errors > 0 ? (
+          <span className="text-destructive ml-1.5">
+            · {run.errors} err
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function FailureList({
+  runFailed,
+  variant,
+}: {
+  runFailed: Expectation[];
+  variant: "with" | "without";
+}) {
+  if (runFailed.length === 0) {
+    return (
+      <span
+        className={cn(
+          "font-mono text-[10px] tracking-widest uppercase",
+          variant === "with"
+            ? "text-emerald-700 dark:text-emerald-300"
+            : "text-amber-700 dark:text-amber-300",
+        )}
+      >
+        all passed
+      </span>
+    );
+  }
+  return (
+    <ul className="space-y-1.5">
+      {runFailed.map((e, i) => (
+        <li key={i} className="flex gap-2 text-xs leading-snug">
+          <span aria-hidden className="text-destructive font-mono">
+            ✗
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-destructive font-medium">{e.text}</div>
+            {e.evidence ? (
+              <div className="text-muted-foreground mt-0.5">{e.evidence}</div>
+            ) : null}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}

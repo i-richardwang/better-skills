@@ -8,6 +8,13 @@
       "when": 1777041043417,
       "tag": "0000_stiff_ezekiel",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777130046898,
+      "tag": "0001_smiling_stepford_cuckoos",
+      "breakpoints": true
     }
   ]
 }

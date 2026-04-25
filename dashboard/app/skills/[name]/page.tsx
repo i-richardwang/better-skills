@@ -29,6 +29,10 @@ import {
   type TrajectoryDatum,
 } from "@/components/trajectory-chart-client";
 import { PerEvalTrajectoryGridClient } from "@/components/per-eval-trajectory-client";
+import {
+  ResourceTrajectoryGridClient,
+  type ResourceTrajectoryDatum,
+} from "@/components/resource-trajectory-client";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +73,22 @@ export default async function SkillPage({
         ? Math.min(1, p.withoutSkillMean + p.withoutSkillStddev)
         : null,
   }));
+
+  const resourceData: ResourceTrajectoryDatum[] = points.map((p) => ({
+    iteration: p.iterationNumber,
+    withSkillTokens: p.withSkillTokensMean,
+    withoutSkillTokens: p.withoutSkillTokensMean,
+    withSkillSeconds: p.withSkillTimeSecondsMean,
+    withoutSkillSeconds: p.withoutSkillTimeSecondsMean,
+  }));
+
+  const hasResourceData = resourceData.some(
+    (d) =>
+      d.withSkillTokens !== null ||
+      d.withoutSkillTokens !== null ||
+      d.withSkillSeconds !== null ||
+      d.withoutSkillSeconds !== null,
+  );
 
   const latestDelta =
     latest && latest.withSkillMean !== null && latest.withoutSkillMean !== null
@@ -121,11 +141,25 @@ export default async function SkillPage({
               Per-eval trajectories
             </h2>
             <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
-              {perEval.length} eval{perEval.length === 1 ? "" : "s"} · mean
-              pass rate per configuration
+              {perEval.length} eval{perEval.length === 1 ? "" : "s"} · click for
+              task detail
             </span>
           </header>
-          <PerEvalTrajectoryGridClient items={perEval} />
+          <PerEvalTrajectoryGridClient items={perEval} skillName={skill.name} />
+        </section>
+      ) : null}
+
+      {hasResourceData ? (
+        <section className="space-y-4">
+          <header className="border-border flex items-baseline justify-between border-b pb-3">
+            <h2 className="font-heading text-xl tracking-tight">
+              Resource trajectory
+            </h2>
+            <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
+              tokens · time per run
+            </span>
+          </header>
+          <ResourceTrajectoryGridClient data={resourceData} />
         </section>
       ) : null}
 

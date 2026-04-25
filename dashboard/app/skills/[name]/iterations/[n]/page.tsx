@@ -20,7 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { Expectation } from "@/lib/queries";
+import type { EvalDefinition, Expectation } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +44,10 @@ export default async function IterationPage({
       : null;
 
   const grouped = groupRunsByEval(iter.runs);
+  const evalsById = new Map<number, EvalDefinition>();
+  for (const e of iter.evalsDefinition ?? []) {
+    evalsById.set(e.id, e);
+  }
 
   return (
     <div className="space-y-10">
@@ -158,7 +162,11 @@ export default async function IterationPage({
           ) : (
             <div className="space-y-6">
               {grouped.map((g) => (
-                <EvalGroup key={g.evalId} group={g} />
+                <EvalGroup
+                  key={g.evalId}
+                  group={g}
+                  definition={evalsById.get(g.evalId) ?? null}
+                />
               ))}
             </div>
           )}
@@ -324,7 +332,13 @@ function evalBucketMean(runs: RunRow[]): number | null {
 const RUN_GRID =
   "grid grid-cols-[5.5rem_2.75rem_3.5rem_4.5rem_3.75rem_3.75rem_3rem_2.75rem_1rem] items-center gap-3";
 
-function EvalGroup({ group }: { group: EvalBucket }) {
+function EvalGroup({
+  group,
+  definition,
+}: {
+  group: EvalBucket;
+  definition: EvalDefinition | null;
+}) {
   const withMean = evalBucketMean(group.withSkill);
   const withoutMean = evalBucketMean(group.withoutSkill);
   const bucketDelta =
@@ -359,6 +373,8 @@ function EvalGroup({ group }: { group: EvalBucket }) {
           ) : null}
         </div>
       </CardHeader>
+
+      {definition ? <EvalTaskDetails definition={definition} /> : null}
 
       <div className="overflow-x-auto">
         <div className="min-w-[44rem]">
@@ -469,6 +485,84 @@ function RunRowDetails({ run: r }: { run: RunRow }) {
         </div>
       ) : null}
     </details>
+  );
+}
+
+function EvalTaskDetails({ definition }: { definition: EvalDefinition }) {
+  const { prompt, expectedOutput, files, expectations } = definition;
+  const hasAny =
+    !!prompt ||
+    !!expectedOutput ||
+    (files && files.length > 0) ||
+    (expectations && expectations.length > 0);
+  if (!hasAny) return null;
+
+  return (
+    <details className="border-border group border-t">
+      <summary
+        className={cn(
+          "text-muted-foreground hover:bg-muted/40 flex cursor-pointer items-center gap-2 px-4 py-2.5 font-mono text-[10px] tracking-widest uppercase select-none",
+          "list-none [&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <span
+          aria-hidden
+          className="inline-block transition-transform group-open:rotate-90"
+        >
+          ›
+        </span>
+        Task definition
+      </summary>
+      <div className="bg-muted/20 border-border space-y-4 border-t px-4 py-4 text-sm leading-relaxed">
+        {prompt ? (
+          <TaskField label="Prompt">
+            <pre className="font-mono text-xs whitespace-pre-wrap">{prompt}</pre>
+          </TaskField>
+        ) : null}
+        {expectedOutput ? (
+          <TaskField label="Expected output">
+            <p>{expectedOutput}</p>
+          </TaskField>
+        ) : null}
+        {files && files.length > 0 ? (
+          <TaskField label="Input files">
+            <ul className="space-y-0.5 font-mono text-xs">
+              {files.map((f, i) => (
+                <li key={i} className="text-muted-foreground">
+                  {f}
+                </li>
+              ))}
+            </ul>
+          </TaskField>
+        ) : null}
+        {expectations && expectations.length > 0 ? (
+          <TaskField label="Expectations">
+            <ul className="list-disc space-y-0.5 pl-4 text-sm">
+              {expectations.map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+            </ul>
+          </TaskField>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+function TaskField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="text-muted-foreground mb-1 font-mono text-[10px] tracking-widest uppercase">
+        {label}
+      </div>
+      {children}
+    </div>
   );
 }
 
