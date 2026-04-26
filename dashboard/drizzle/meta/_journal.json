@@ -8,6 +8,13 @@
       "when": 1777190462034,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777208430121,
+      "tag": "0001_add_skill_files",
+      "breakpoints": true
     }
   ]
 }

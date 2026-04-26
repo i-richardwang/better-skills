@@ -66,6 +66,9 @@ export const iterations = pgTable(
 
     rawBenchmark: jsonb("raw_benchmark").notNull(),
     evalsDefinition: jsonb("evals_definition"),
+    // Map of {relative_path: file_contents} for the rest of the skill dir
+    // (excludes SKILL.md and evals.json — those have dedicated columns).
+    skillFiles: jsonb("skill_files"),
 
     uploadedAt: timestamp("uploaded_at", { withTimezone: true })
       .notNull()

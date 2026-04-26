@@ -34,6 +34,117 @@ from .config import ConfigError, load_evals_config
 MANIFEST_FILE = "manifest.json"
 
 
+# --- Skill file scanner -----------------------------------------------------
+#
+# Captures the rest of the skill directory (sub-docs, agents, scripts, refs)
+# for each iteration. SKILL.md and evals.json are intentionally NOT included
+# here — they ride on their own payload fields (skill_md / evals_definition)
+# and have bespoke UI on the dashboard.
+
+_TEXT_EXTENSIONS = frozenset({
+    ".md", ".json", ".py", ".txt", ".yml", ".yaml", ".toml",
+    ".sh", ".ts", ".tsx", ".js", ".jsx", ".css", ".html",
+    ".cfg", ".ini",
+})
+_EXTENSIONLESS_ALLOWLIST = frozenset({
+    "Makefile", "Dockerfile", "LICENSE", "README", "Procfile",
+})
+_EXCLUDED_DIRS = frozenset({
+    ".git", "__pycache__", "node_modules", "dist", "build",
+    ".venv", "venv", ".pytest_cache", ".mypy_cache", ".next",
+    ".turbo", ".cache", "target", "out",
+})
+_EXCLUDED_FILES = frozenset({".DS_Store", "Thumbs.db"})
+_SECRET_PREFIXES = (".env", "secrets.", "id_rsa")
+_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
+# Stored on dedicated columns; carving them out avoids redundancy and lets
+# the dashboard render them with bespoke UI.
+_EXCLUDED_RELATIVE_PATHS = frozenset({"SKILL.md", "evals.json"})
+
+_MAX_FILE_BYTES = 200_000
+_MAX_TOTAL_BYTES = 2_000_000
+_MAX_FILES = 500
+
+
+def _is_text_name(name: str) -> bool:
+    if name in _EXTENSIONLESS_ALLOWLIST:
+        return True
+    ext = os.path.splitext(name)[1].lower()
+    return ext in _TEXT_EXTENSIONS
+
+
+def _is_secret_name(name: str) -> bool:
+    return name.startswith(_SECRET_PREFIXES) or name.endswith(_SECRET_SUFFIXES)
+
+
+def _collect_skill_files(skill_path: Path) -> tuple[dict[str, str], list[str]]:
+    """Walk skill_path, return (files_map, warnings).
+
+    Keys are forward-slash relative paths. Symlinks are not followed. Three
+    caps apply (per-file, total, entry count); when any is hit we stop and
+    record a warning rather than failing the upload.
+    """
+    files: dict[str, str] = {}
+    warnings: list[str] = []
+    total_bytes = 0
+    root = skill_path.resolve()
+
+    # Sorted traversal so size-cap truncation is deterministic.
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = sorted(d for d in dirnames if d not in _EXCLUDED_DIRS)
+        for name in sorted(filenames):
+            if name in _EXCLUDED_FILES or _is_secret_name(name):
+                continue
+            if not _is_text_name(name):
+                continue
+
+            abs_path = Path(dirpath) / name
+            try:
+                rel = abs_path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if rel in _EXCLUDED_RELATIVE_PATHS:
+                continue
+
+            try:
+                size = abs_path.stat().st_size
+            except OSError:
+                continue
+
+            if size > _MAX_FILE_BYTES:
+                warnings.append(
+                    f"skipped {rel}: {size} bytes > {_MAX_FILE_BYTES} per-file cap"
+                )
+                continue
+
+            if len(files) >= _MAX_FILES:
+                warnings.append(
+                    f"truncated at {rel}: > {_MAX_FILES} entries cap"
+                )
+                return files, warnings
+
+            if total_bytes + size > _MAX_TOTAL_BYTES:
+                warnings.append(
+                    f"truncated at {rel}: total > {_MAX_TOTAL_BYTES} bytes cap"
+                )
+                return files, warnings
+
+            try:
+                content = abs_path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError) as e:
+                warnings.append(f"skipped {rel}: {type(e).__name__}")
+                continue
+
+            if "\x00" in content:
+                warnings.append(f"skipped {rel}: contains NULL byte")
+                continue
+
+            files[rel] = content
+            total_bytes += size
+
+    return files, warnings
+
+
 def _get_git_sha(path: Path) -> Optional[str]:
     try:
         result = subprocess.run(
@@ -164,6 +275,11 @@ def build_payload(
         evals_def = _read_evals_definition(skill_path)
         if evals_def is not None:
             payload["evals_definition"] = evals_def
+        files, file_warnings = _collect_skill_files(skill_path)
+        if files:
+            payload["skill_files"] = files
+        for w in file_warnings:
+            print(f"[dashboard] {w}", file=sys.stderr)
 
     return payload
 

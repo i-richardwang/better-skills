@@ -12,6 +12,34 @@ export const dynamic = "force-dynamic";
 // characters so they're safe to display, log, and join on.
 const variantName = z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/);
 
+// Skill-relative POSIX path. Defense-in-depth against path traversal,
+// absolute paths, Windows separators, and NULL bytes — the python scanner
+// produces clean paths but the API must validate independently.
+const skillFilePath = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine((p) => !p.startsWith("/"), "absolute path not allowed")
+  .refine((p) => !p.includes("\\"), "backslash not allowed")
+  .refine((p) => !p.includes("\0"), "NULL byte not allowed")
+  .refine(
+    (p) =>
+      !p
+        .split("/")
+        .some((seg) => seg === "" || seg === "." || seg === ".."),
+    "invalid path segment",
+  );
+
+const MAX_SKILL_FILES = 500;
+const MAX_SKILL_FILE_BYTES = 200_000;
+
+const skillFilesSchema = z
+  .record(skillFilePath, z.string().max(MAX_SKILL_FILE_BYTES))
+  .refine(
+    (m) => Object.keys(m).length <= MAX_SKILL_FILES,
+    `too many entries (>${MAX_SKILL_FILES})`,
+  );
+
 const incomingRunSchema = z.object({
   eval_id: z.number().int(),
   eval_name: z.string().max(500).optional(),
@@ -31,6 +59,10 @@ const bodySchema = z.object({
   // evals_definition is the full evals.json (variants + defaults + cases) so
   // the dashboard can render the case prompts that produced these results.
   evals_definition: z.any().optional(),
+  // skill_files is the rest of the skill directory's text content
+  // (sub-docs, agents, scripts) keyed by relative path. SKILL.md and
+  // evals.json are excluded — they ride on their own fields above.
+  skill_files: skillFilesSchema.optional(),
 });
 
 type Body = z.infer<typeof bodySchema>;
@@ -172,6 +204,7 @@ export async function POST(request: Request) {
     git_commit_sha,
     hostname,
     evals_definition,
+    skill_files,
   } = parsed;
 
   const iterSummary = extractIterationSummary(benchmark);
@@ -201,6 +234,7 @@ export async function POST(request: Request) {
         hostname: hostname ?? null,
         rawBenchmark: benchmark,
         evalsDefinition: evals_definition ?? null,
+        skillFiles: skill_files ?? null,
       };
 
       const [iterationRow] = await tx
@@ -215,6 +249,7 @@ export async function POST(request: Request) {
             hostname: hostname ?? null,
             rawBenchmark: benchmark,
             evalsDefinition: evals_definition ?? null,
+            skillFiles: skill_files ?? null,
             uploadedAt: sql`now()`,
           },
         })
