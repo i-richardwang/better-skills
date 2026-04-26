@@ -1,9 +1,10 @@
-#!/usr/bin/env python3
 """Run the eval + improve loop until all pass or max iterations reached.
 
-Combines run_eval.py and improve_description.py in a loop, tracking history
+Combines run_eval and improve_description in a loop, tracking history
 and returning the best description found. Supports train/test split to prevent
 overfitting.
+
+CLI entry point: `scripts.cli trigger-loop`.
 """
 
 import argparse
@@ -15,6 +16,7 @@ import time
 import webbrowser
 from pathlib import Path
 
+from scripts.config import find_triggers_config, load_triggers_config
 from scripts.generate_report import generate_html
 from scripts.improve_description import improve_description
 from scripts.run_eval import find_project_root, run_eval
@@ -241,46 +243,33 @@ def run_loop(
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run eval + improve loop")
-    parser.add_argument("--eval-set", required=True, help="Path to eval set JSON file")
-    parser.add_argument("--skill-path", required=True, help="Path to skill directory")
-    parser.add_argument("--description", default=None, help="Override starting description")
-    parser.add_argument("--num-workers", type=int, default=10, help="Number of parallel workers")
-    parser.add_argument("--timeout", type=int, default=30, help="Timeout per query in seconds")
-    parser.add_argument("--max-iterations", type=int, default=5, help="Max improvement iterations")
-    parser.add_argument("--runs-per-query", type=int, default=3, help="Number of runs per query")
-    parser.add_argument("--trigger-threshold", type=float, default=0.5, help="Trigger rate threshold")
-    parser.add_argument("--holdout", type=float, default=0.4, help="Fraction of eval set to hold out for testing (0 to disable)")
-    parser.add_argument("--model", required=True, help="Model for improvement")
-    parser.add_argument("--verbose", action="store_true", help="Print progress to stderr")
-    parser.add_argument("--report", default="auto", help="Generate HTML report at this path (default: 'auto' for temp file, 'none' to disable)")
-    parser.add_argument("--results-dir", default=None, help="Save all outputs (results.json, report.html, log.txt) to a timestamped subdirectory here")
-    args = parser.parse_args()
-
-    eval_set = json.loads(Path(args.eval_set).read_text())
-    skill_path = Path(args.skill_path)
-
+def run_from_cli(args: argparse.Namespace) -> dict:
+    """Entry point used by `scripts.cli trigger-loop`."""
+    skill_path = Path(args.skill_path).resolve()
     if not (skill_path / "SKILL.md").exists():
-        print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f"No SKILL.md found at {skill_path}")
+
+    triggers_json = (
+        Path(args.triggers_json).resolve() if args.triggers_json
+        else find_triggers_config(skill_path).resolve()
+    )
+    cfg = load_triggers_config(triggers_json)
+    eval_set = [q.model_dump() for q in cfg.queries]
 
     name, _, _ = parse_skill_md(skill_path)
 
-    # Set up live report path
+    # Live HTML report (auto = temp file opened in browser, none = disabled)
     if args.report != "none":
         if args.report == "auto":
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             live_report_path = Path(tempfile.gettempdir()) / f"skill_description_report_{skill_path.name}_{timestamp}.html"
         else:
             live_report_path = Path(args.report)
-        # Open the report immediately so the user can watch
         live_report_path.write_text("<html><body><h1>Starting optimization loop...</h1><meta http-equiv='refresh' content='5'></body></html>")
         webbrowser.open(str(live_report_path))
     else:
         live_report_path = None
 
-    # Determine output directory (create before run_loop so logs can be written)
     if args.results_dir:
         timestamp = time.strftime("%Y-%m-%d_%H%M%S")
         results_dir = Path(args.results_dir) / timestamp
@@ -294,25 +283,21 @@ def main():
         eval_set=eval_set,
         skill_path=skill_path,
         description_override=args.description,
-        num_workers=args.num_workers,
-        timeout=args.timeout,
-        max_iterations=args.max_iterations,
-        runs_per_query=args.runs_per_query,
-        trigger_threshold=args.trigger_threshold,
-        holdout=args.holdout,
-        model=args.model,
+        num_workers=args.num_workers or cfg.defaults.num_workers,
+        timeout=args.timeout or cfg.defaults.timeout_s,
+        max_iterations=args.max_iterations or cfg.defaults.max_iterations,
+        runs_per_query=args.runs_per_query or cfg.defaults.runs_per_query,
+        trigger_threshold=args.trigger_threshold or cfg.defaults.trigger_threshold,
+        holdout=args.holdout if args.holdout is not None else cfg.defaults.holdout,
+        model=args.model or cfg.default_model or "claude-opus-4-7",
         verbose=args.verbose,
         live_report_path=live_report_path,
         log_dir=log_dir,
     )
 
-    # Save JSON output
-    json_output = json.dumps(output, indent=2)
-    print(json_output)
     if results_dir:
-        (results_dir / "results.json").write_text(json_output)
+        (results_dir / "results.json").write_text(json.dumps(output, indent=2))
 
-    # Write final HTML report (without auto-refresh)
     if live_report_path:
         live_report_path.write_text(generate_html(output, auto_refresh=False, skill_name=name))
         print(f"\nReport: {live_report_path}", file=sys.stderr)
@@ -323,6 +308,4 @@ def main():
     if results_dir:
         print(f"Results saved to: {results_dir}", file=sys.stderr)
 
-
-if __name__ == "__main__":
-    main()
+    return output

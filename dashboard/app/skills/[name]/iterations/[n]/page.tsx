@@ -39,11 +39,13 @@ export default async function IterationPage({
   if (!iter) notFound();
 
   const delta =
-    iter.withSkillMean !== null && iter.withoutSkillMean !== null
-      ? iter.withSkillMean - iter.withoutSkillMean
+    iter.primaryMean !== null && iter.baselineMean !== null
+      ? iter.primaryMean - iter.baselineMean
       : null;
 
-  const grouped = groupRunsByEval(iter.runs);
+  const primaryLabel = iter.primaryVariant ?? "primary";
+  const baselineLabel = iter.baselineVariant ?? "baseline";
+  const grouped = groupRunsByEval(iter.runs, iter.primaryVariant, iter.baselineVariant);
   const evalsById = new Map<number, EvalDefinition>();
   for (const e of iter.evalsDefinition ?? []) {
     evalsById.set(e.id, e);
@@ -95,20 +97,20 @@ export default async function IterationPage({
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
-          label="With skill"
-          value={fmtPct(iter.withSkillMean)}
+          label={primaryLabel}
+          value={fmtPct(iter.primaryMean)}
           hint={
-            iter.withSkillStddev !== null
-              ? `σ ±${(iter.withSkillStddev * 100).toFixed(1)}pp`
+            iter.primaryStddev !== null
+              ? `σ ±${(iter.primaryStddev * 100).toFixed(1)}pp`
               : undefined
           }
         />
         <MetricCard
-          label="Without skill"
-          value={fmtPct(iter.withoutSkillMean)}
+          label={baselineLabel}
+          value={fmtPct(iter.baselineMean)}
           hint={
-            iter.withoutSkillStddev !== null
-              ? `σ ±${(iter.withoutSkillStddev * 100).toFixed(1)}pp`
+            iter.baselineStddev !== null
+              ? `σ ±${(iter.baselineStddev * 100).toFixed(1)}pp`
               : undefined
           }
         />
@@ -124,20 +126,20 @@ export default async function IterationPage({
                   ? "destructive"
                   : "secondary"
           }
-          hint="with − without"
+          hint={`${primaryLabel} − ${baselineLabel}`}
         />
         <MetricCard
           label="Cost ratio"
           value={
-            iter.withSkillTokensMean !== null &&
-            iter.withoutSkillTokensMean !== null &&
-            iter.withoutSkillTokensMean > 0
-              ? `${(iter.withSkillTokensMean / iter.withoutSkillTokensMean).toFixed(2)}×`
+            iter.primaryTokensMean !== null &&
+            iter.baselineTokensMean !== null &&
+            iter.baselineTokensMean > 0
+              ? `${(iter.primaryTokensMean / iter.baselineTokensMean).toFixed(2)}×`
               : "—"
           }
           hint={
-            iter.withSkillTokensMean !== null
-              ? `${fmtTokens(iter.withSkillTokensMean)} tokens`
+            iter.primaryTokensMean !== null
+              ? `${fmtTokens(iter.primaryTokensMean)} tokens`
               : undefined
           }
         />
@@ -166,6 +168,8 @@ export default async function IterationPage({
                   key={g.evalId}
                   group={g}
                   definition={evalsById.get(g.evalId) ?? null}
+                  primaryLabel={primaryLabel}
+                  baselineLabel={baselineLabel}
                 />
               ))}
             </div>
@@ -177,23 +181,23 @@ export default async function IterationPage({
             <CardHeader>
               <CardEyebrow>Resource usage</CardEyebrow>
               <CardTitle className="text-base">
-                Per-run averages (with_skill)
+                Per-run averages ({primaryLabel})
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <KV label="Tokens" value={fmtTokens(iter.withSkillTokensMean)} />
+              <KV label="Tokens" value={fmtTokens(iter.primaryTokensMean)} />
               <KV
                 label="Wall time"
-                value={fmtSeconds(iter.withSkillTimeSecondsMean)}
+                value={fmtSeconds(iter.primaryTimeSecondsMean)}
               />
               <div className="border-border my-2 border-t" />
               <KV
                 label="Tokens (baseline)"
-                value={fmtTokens(iter.withoutSkillTokensMean)}
+                value={fmtTokens(iter.baselineTokensMean)}
               />
               <KV
                 label="Wall time (baseline)"
-                value={fmtSeconds(iter.withoutSkillTimeSecondsMean)}
+                value={fmtSeconds(iter.baselineTimeSecondsMean)}
               />
             </CardContent>
           </Card>
@@ -299,24 +303,31 @@ function KV({ label, value }: { label: string; value: string }) {
 type EvalBucket = {
   evalId: number;
   evalName: string | null;
-  withSkill: RunRow[];
-  withoutSkill: RunRow[];
+  primary: RunRow[];
+  baseline: RunRow[];
+  other: RunRow[];
 };
 
-function groupRunsByEval(runs: RunRow[]): EvalBucket[] {
+function groupRunsByEval(
+  runs: RunRow[],
+  primaryVariant: string | null,
+  baselineVariant: string | null,
+): EvalBucket[] {
   const map = new Map<number, EvalBucket>();
   for (const r of runs) {
     if (!map.has(r.evalId)) {
       map.set(r.evalId, {
         evalId: r.evalId,
         evalName: r.evalName,
-        withSkill: [],
-        withoutSkill: [],
+        primary: [],
+        baseline: [],
+        other: [],
       });
     }
     const bucket = map.get(r.evalId)!;
-    if (r.configuration === "with_skill") bucket.withSkill.push(r);
-    else bucket.withoutSkill.push(r);
+    if (r.configuration === primaryVariant) bucket.primary.push(r);
+    else if (r.configuration === baselineVariant) bucket.baseline.push(r);
+    else bucket.other.push(r);
   }
   return [...map.values()].sort((a, b) => a.evalId - b.evalId);
 }
@@ -335,15 +346,21 @@ const RUN_GRID =
 function EvalGroup({
   group,
   definition,
+  primaryLabel,
+  baselineLabel,
 }: {
   group: EvalBucket;
   definition: EvalDefinition | null;
+  primaryLabel: string;
+  baselineLabel: string;
 }) {
-  const withMean = evalBucketMean(group.withSkill);
-  const withoutMean = evalBucketMean(group.withoutSkill);
+  const primaryMean = evalBucketMean(group.primary);
+  const baselineMean = evalBucketMean(group.baseline);
   const bucketDelta =
-    withMean !== null && withoutMean !== null ? withMean - withoutMean : null;
-  const rows = [...group.withSkill, ...group.withoutSkill];
+    primaryMean !== null && baselineMean !== null
+      ? primaryMean - baselineMean
+      : null;
+  const rows = [...group.primary, ...group.baseline, ...group.other];
 
   return (
     <Card>
@@ -356,7 +373,7 @@ function EvalGroup({
         </div>
         <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
           <span className="text-muted-foreground">
-            w/ {fmtPct(withMean)} · w/o {fmtPct(withoutMean)}
+            {primaryLabel}: {fmtPct(primaryMean)} · {baselineLabel}: {fmtPct(baselineMean)}
           </span>
           {bucketDelta !== null ? (
             <Badge
@@ -396,7 +413,12 @@ function EvalGroup({
           </div>
 
           {rows.map((r) => (
-            <RunRowDetails key={r.id} run={r} />
+            <RunRowDetails
+              key={r.id}
+              run={r}
+              primaryVariant={group.primary[0]?.configuration ?? null}
+              baselineVariant={group.baseline[0]?.configuration ?? null}
+            />
           ))}
         </div>
       </div>
@@ -404,9 +426,19 @@ function EvalGroup({
   );
 }
 
-function RunRowDetails({ run: r }: { run: RunRow }) {
+function RunRowDetails({
+  run: r,
+  primaryVariant,
+  baselineVariant,
+}: {
+  run: RunRow;
+  primaryVariant: string | null;
+  baselineVariant: string | null;
+}) {
   const hasExpectations = r.expectations.length > 0;
   const passedCount = r.expectations.filter((e) => e.passed).length;
+  const isPrimary = r.configuration === primaryVariant;
+  const isBaseline = r.configuration === baselineVariant;
   return (
     <details
       className={cn(
@@ -427,10 +459,8 @@ function RunRowDetails({ run: r }: { run: RunRow }) {
         )}
       >
         <span>
-          <Badge
-            variant={r.configuration === "with_skill" ? "outline" : "secondary"}
-          >
-            {r.configuration === "with_skill" ? "with" : "without"}
+          <Badge variant={isPrimary ? "outline" : isBaseline ? "secondary" : "secondary"}>
+            {r.configuration}
           </Badge>
         </span>
         <span className="font-mono tabular-nums">#{r.runNumber}</span>

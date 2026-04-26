@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 """Run trigger evaluation for a skill description.
 
 Tests whether a skill's description causes Claude to trigger (read the skill)
-for a set of queries. Outputs results as JSON.
+for a set of queries. The CLI entry point is `scripts.cli trigger-eval`.
 """
 
 import argparse
@@ -16,6 +15,7 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+from scripts.config import find_triggers_config, load_triggers_config
 from scripts.utils import parse_skill_md
 
 
@@ -256,27 +256,20 @@ def run_eval(
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run trigger evaluation for a skill description")
-    parser.add_argument("--eval-set", required=True, help="Path to eval set JSON file")
-    parser.add_argument("--skill-path", required=True, help="Path to skill directory")
-    parser.add_argument("--description", default=None, help="Override description to test")
-    parser.add_argument("--num-workers", type=int, default=10, help="Number of parallel workers")
-    parser.add_argument("--timeout", type=int, default=30, help="Timeout per query in seconds")
-    parser.add_argument("--runs-per-query", type=int, default=3, help="Number of runs per query")
-    parser.add_argument("--trigger-threshold", type=float, default=0.5, help="Trigger rate threshold")
-    parser.add_argument("--model", default=None, help="Model to use for claude -p (default: user's configured model)")
-    parser.add_argument("--verbose", action="store_true", help="Print progress to stderr")
-    args = parser.parse_args()
-
-    eval_set = json.loads(Path(args.eval_set).read_text())
-    skill_path = Path(args.skill_path)
-
+def run_from_cli(args: argparse.Namespace) -> dict:
+    """Entry point used by `scripts.cli trigger-eval`."""
+    skill_path = Path(args.skill_path).resolve()
     if not (skill_path / "SKILL.md").exists():
-        print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f"No SKILL.md found at {skill_path}")
 
-    name, original_description, content = parse_skill_md(skill_path)
+    triggers_json = (
+        Path(args.triggers_json).resolve() if args.triggers_json
+        else find_triggers_config(skill_path).resolve()
+    )
+    cfg = load_triggers_config(triggers_json)
+    eval_set = [q.model_dump() for q in cfg.queries]
+
+    name, original_description, _ = parse_skill_md(skill_path)
     description = args.description or original_description
     project_root = find_project_root()
 
@@ -287,12 +280,12 @@ def main():
         eval_set=eval_set,
         skill_name=name,
         description=description,
-        num_workers=args.num_workers,
-        timeout=args.timeout,
+        num_workers=args.num_workers or cfg.defaults.num_workers,
+        timeout=args.timeout or cfg.defaults.timeout_s,
         project_root=project_root,
-        runs_per_query=args.runs_per_query,
-        trigger_threshold=args.trigger_threshold,
-        model=args.model,
+        runs_per_query=args.runs_per_query or cfg.defaults.runs_per_query,
+        trigger_threshold=args.trigger_threshold or cfg.defaults.trigger_threshold,
+        model=args.model or cfg.default_model,
     )
 
     if args.verbose:
@@ -303,8 +296,4 @@ def main():
             rate_str = f"{r['triggers']}/{r['runs']}"
             print(f"  [{status}] rate={rate_str} expected={r['should_trigger']}: {r['query'][:70]}", file=sys.stderr)
 
-    print(json.dumps(output, indent=2))
-
-
-if __name__ == "__main__":
-    main()
+    return output

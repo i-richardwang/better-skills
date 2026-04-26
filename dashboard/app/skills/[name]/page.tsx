@@ -54,50 +54,55 @@ export default async function SkillPage({
   const first = points[0] ?? null;
   const chartData: TrajectoryDatum[] = points.map((p) => ({
     iteration: p.iterationNumber,
-    withSkill: p.withSkillMean,
-    withSkillBandLow:
-      p.withSkillMean !== null && p.withSkillStddev !== null
-        ? Math.max(0, p.withSkillMean - p.withSkillStddev)
+    primary: p.primaryMean,
+    primaryBandLow:
+      p.primaryMean !== null && p.primaryStddev !== null
+        ? Math.max(0, p.primaryMean - p.primaryStddev)
         : null,
-    withSkillBandHigh:
-      p.withSkillMean !== null && p.withSkillStddev !== null
-        ? Math.min(1, p.withSkillMean + p.withSkillStddev)
+    primaryBandHigh:
+      p.primaryMean !== null && p.primaryStddev !== null
+        ? Math.min(1, p.primaryMean + p.primaryStddev)
         : null,
-    withoutSkill: p.withoutSkillMean,
-    withoutSkillBandLow:
-      p.withoutSkillMean !== null && p.withoutSkillStddev !== null
-        ? Math.max(0, p.withoutSkillMean - p.withoutSkillStddev)
+    baseline: p.baselineMean,
+    baselineBandLow:
+      p.baselineMean !== null && p.baselineStddev !== null
+        ? Math.max(0, p.baselineMean - p.baselineStddev)
         : null,
-    withoutSkillBandHigh:
-      p.withoutSkillMean !== null && p.withoutSkillStddev !== null
-        ? Math.min(1, p.withoutSkillMean + p.withoutSkillStddev)
+    baselineBandHigh:
+      p.baselineMean !== null && p.baselineStddev !== null
+        ? Math.min(1, p.baselineMean + p.baselineStddev)
         : null,
   }));
 
   const resourceData: ResourceTrajectoryDatum[] = points.map((p) => ({
     iteration: p.iterationNumber,
-    withSkillTokens: p.withSkillTokensMean,
-    withoutSkillTokens: p.withoutSkillTokensMean,
-    withSkillSeconds: p.withSkillTimeSecondsMean,
-    withoutSkillSeconds: p.withoutSkillTimeSecondsMean,
+    primaryTokens: p.primaryTokensMean,
+    baselineTokens: p.baselineTokensMean,
+    primarySeconds: p.primaryTimeSecondsMean,
+    baselineSeconds: p.baselineTimeSecondsMean,
   }));
 
   const hasResourceData = resourceData.some(
     (d) =>
-      d.withSkillTokens !== null ||
-      d.withoutSkillTokens !== null ||
-      d.withSkillSeconds !== null ||
-      d.withoutSkillSeconds !== null,
+      d.primaryTokens !== null ||
+      d.baselineTokens !== null ||
+      d.primarySeconds !== null ||
+      d.baselineSeconds !== null,
   );
 
+  // Variant labels — use the most-recent iteration's declared names so the
+  // chart legend reflects what the user actually wrote in evals.json.
+  const primaryLabel = latest?.primaryVariant ?? "primary";
+  const baselineLabel = latest?.baselineVariant ?? "baseline";
+
   const latestDelta =
-    latest && latest.withSkillMean !== null && latest.withoutSkillMean !== null
-      ? latest.withSkillMean - latest.withoutSkillMean
+    latest && latest.primaryMean !== null && latest.baselineMean !== null
+      ? latest.primaryMean - latest.baselineMean
       : null;
 
   const trendDelta =
-    first && latest && first.withSkillMean !== null && latest.withSkillMean !== null
-      ? latest.withSkillMean - first.withSkillMean
+    first && latest && first.primaryMean !== null && latest.primaryMean !== null
+      ? latest.primaryMean - first.primaryMean
       : null;
 
   return (
@@ -110,10 +115,12 @@ export default async function SkillPage({
       />
 
       <KpiRow
-        latestPassRate={latest?.withSkillMean ?? null}
+        latestPassRate={latest?.primaryMean ?? null}
         latestDelta={latestDelta}
         trendDelta={trendDelta}
         latestIteration={latest?.iterationNumber ?? null}
+        primaryLabel={primaryLabel}
+        baselineLabel={baselineLabel}
       />
 
       <section className="space-y-4">
@@ -121,14 +128,18 @@ export default async function SkillPage({
           <h2 className="font-heading text-xl tracking-tight">
             Pass-rate trajectory
           </h2>
-          <LegendHint />
+          <LegendHint primaryLabel={primaryLabel} baselineLabel={baselineLabel} />
         </header>
         <Card>
           <CardContent className="px-2 py-2">
             {points.length === 0 ? (
               <EmptyChart />
             ) : (
-              <TrajectoryChartClient data={chartData} />
+              <TrajectoryChartClient
+                data={chartData}
+                primaryLabel={primaryLabel}
+                baselineLabel={baselineLabel}
+              />
             )}
           </CardContent>
         </Card>
@@ -159,7 +170,11 @@ export default async function SkillPage({
               tokens · time per run
             </span>
           </header>
-          <ResourceTrajectoryGridClient data={resourceData} />
+          <ResourceTrajectoryGridClient
+            data={resourceData}
+            primaryLabel={primaryLabel}
+            baselineLabel={baselineLabel}
+          />
         </section>
       ) : null}
 
@@ -213,21 +228,25 @@ function KpiRow({
   latestDelta,
   trendDelta,
   latestIteration,
+  primaryLabel,
+  baselineLabel,
 }: {
   latestPassRate: number | null;
   latestDelta: number | null;
   trendDelta: number | null;
   latestIteration: number | null;
+  primaryLabel: string;
+  baselineLabel: string;
 }) {
   return (
     <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <Kpi
-        label="Latest with_skill"
+        label={`Latest ${primaryLabel}`}
         value={fmtPct(latestPassRate, 1)}
         hint={latestIteration !== null ? `iteration #${latestIteration}` : "—"}
       />
       <Kpi
-        label="Latest vs. without"
+        label={`Latest vs. ${baselineLabel}`}
         value={fmtDelta(latestDelta)}
         tone={
           latestDelta === null
@@ -252,7 +271,7 @@ function KpiRow({
                 ? "destructive"
                 : "secondary"
         }
-        hint="with_skill lifetime movement"
+        hint={`${primaryLabel} lifetime movement`}
       />
       <Kpi
         label="Runs per config"
@@ -301,11 +320,17 @@ function Kpi({
   );
 }
 
-function LegendHint() {
+function LegendHint({
+  primaryLabel,
+  baselineLabel,
+}: {
+  primaryLabel: string;
+  baselineLabel: string;
+}) {
   return (
     <div className="flex items-center gap-4 font-mono text-[10px] tracking-widest uppercase">
-      <LegendDot color="oklch(0.62 0.14 150)" label="with_skill" solid />
-      <LegendDot color="oklch(0.60 0.11 55)" label="without_skill" />
+      <LegendDot color="oklch(0.62 0.14 150)" label={primaryLabel} solid />
+      <LegendDot color="oklch(0.60 0.11 55)" label={baselineLabel} />
     </div>
   );
 }
@@ -370,11 +395,11 @@ function IterationsTable({
         <TableHeader>
           <tr>
             <TableHead>Iter</TableHead>
-            <TableHead>With skill</TableHead>
-            <TableHead>Without skill</TableHead>
+            <TableHead>Primary</TableHead>
+            <TableHead>Baseline</TableHead>
             <TableHead>Δ</TableHead>
-            <TableHead>Tokens (w/)</TableHead>
-            <TableHead>Time (w/)</TableHead>
+            <TableHead>Tokens (primary)</TableHead>
+            <TableHead>Time (primary)</TableHead>
             <TableHead>Commit</TableHead>
             <TableHead>Uploaded</TableHead>
           </tr>
@@ -382,8 +407,8 @@ function IterationsTable({
         <TableBody>
           {sorted.map((p) => {
             const delta =
-              p.withSkillMean !== null && p.withoutSkillMean !== null
-                ? p.withSkillMean - p.withoutSkillMean
+              p.primaryMean !== null && p.baselineMean !== null
+                ? p.primaryMean - p.baselineMean
                 : null;
             const href = `/skills/${encodeURIComponent(name)}/iterations/${p.iterationNumber}`;
             return (
@@ -398,20 +423,20 @@ function IterationsTable({
                 </TableCell>
                 <TableCell className="font-mono tabular-nums">
                   <div className="flex items-baseline gap-1.5">
-                    <span>{fmtPct(p.withSkillMean, 1)}</span>
-                    {p.withSkillStddev !== null ? (
+                    <span>{fmtPct(p.primaryMean, 1)}</span>
+                    {p.primaryStddev !== null ? (
                       <span className="text-muted-foreground text-[10px]">
-                        ±{(p.withSkillStddev * 100).toFixed(1)}
+                        ±{(p.primaryStddev * 100).toFixed(1)}
                       </span>
                     ) : null}
                   </div>
                 </TableCell>
                 <TableCell className="font-mono tabular-nums">
                   <div className="flex items-baseline gap-1.5">
-                    <span>{fmtPct(p.withoutSkillMean, 1)}</span>
-                    {p.withoutSkillStddev !== null ? (
+                    <span>{fmtPct(p.baselineMean, 1)}</span>
+                    {p.baselineStddev !== null ? (
                       <span className="text-muted-foreground text-[10px]">
-                        ±{(p.withoutSkillStddev * 100).toFixed(1)}
+                        ±{(p.baselineStddev * 100).toFixed(1)}
                       </span>
                     ) : null}
                   </div>
@@ -434,10 +459,10 @@ function IterationsTable({
                   )}
                 </TableCell>
                 <TableCell className="text-muted-foreground font-mono tabular-nums">
-                  {fmtTokens(p.withSkillTokensMean)}
+                  {fmtTokens(p.primaryTokensMean)}
                 </TableCell>
                 <TableCell className="text-muted-foreground font-mono tabular-nums">
-                  {fmtSeconds(p.withSkillTimeSecondsMean)}
+                  {fmtSeconds(p.primaryTimeSecondsMean)}
                 </TableCell>
                 <TableCell className="text-muted-foreground font-mono text-xs">
                   {shortSha(p.gitCommitSha)}

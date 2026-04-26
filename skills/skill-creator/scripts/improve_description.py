@@ -1,9 +1,10 @@
-#!/usr/bin/env python3
 """Improve a skill description based on eval results.
 
 Takes eval results (from run_eval.py) and generates an improved description
 by calling `claude -p` as a subprocess (same auth pattern as run_eval.py —
 uses the session's Claude Code auth, no separate ANTHROPIC_API_KEY needed).
+
+CLI entry point: `scripts.cli trigger-improve`.
 """
 
 import argparse
@@ -191,19 +192,11 @@ Please respond with only the new description text in <new_description> tags, not
     return description
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Improve a skill description based on eval results")
-    parser.add_argument("--eval-results", required=True, help="Path to eval results JSON (from run_eval.py)")
-    parser.add_argument("--skill-path", required=True, help="Path to skill directory")
-    parser.add_argument("--history", default=None, help="Path to history JSON (previous attempts)")
-    parser.add_argument("--model", required=True, help="Model for improvement")
-    parser.add_argument("--verbose", action="store_true", help="Print thinking to stderr")
-    args = parser.parse_args()
-
-    skill_path = Path(args.skill_path)
+def run_from_cli(args: argparse.Namespace) -> dict:
+    """Entry point used by `scripts.cli trigger-improve`."""
+    skill_path = Path(args.skill_path).resolve()
     if not (skill_path / "SKILL.md").exists():
-        print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f"No SKILL.md found at {skill_path}")
 
     eval_results = json.loads(Path(args.eval_results).read_text())
     history = []
@@ -212,6 +205,7 @@ def main():
 
     name, _, content = parse_skill_md(skill_path)
     current_description = eval_results["description"]
+    model = args.model or "claude-opus-4-7"
 
     if args.verbose:
         print(f"Current: {current_description}", file=sys.stderr)
@@ -223,14 +217,13 @@ def main():
         current_description=current_description,
         eval_results=eval_results,
         history=history,
-        model=args.model,
+        model=model,
     )
 
     if args.verbose:
         print(f"Improved: {new_description}", file=sys.stderr)
 
-    # Output as JSON with both the new description and updated history
-    output = {
+    return {
         "description": new_description,
         "history": history + [{
             "description": current_description,
@@ -240,8 +233,3 @@ def main():
             "results": eval_results["results"],
         }],
     }
-    print(json.dumps(output, indent=2))
-
-
-if __name__ == "__main__":
-    main()

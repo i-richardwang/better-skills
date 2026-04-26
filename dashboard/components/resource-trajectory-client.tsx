@@ -18,10 +18,20 @@ const ResourceTrajectoryGrid = dynamic(
 
 export function ResourceTrajectoryGridClient({
   data,
+  primaryLabel,
+  baselineLabel,
 }: {
   data: ResourceTrajectoryDatum[];
+  primaryLabel?: string;
+  baselineLabel?: string;
 }) {
-  return <ResourceTrajectoryGrid data={data} />;
+  return (
+    <ResourceTrajectoryGrid
+      data={data}
+      primaryLabel={primaryLabel}
+      baselineLabel={baselineLabel}
+    />
+  );
 }
 
 export type { ResourceTrajectoryDatum };

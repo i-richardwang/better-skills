@@ -13,26 +13,25 @@ import { fmtSeconds, fmtSecondsCompact, fmtTokens } from "@/lib/format";
 
 export type ResourceTrajectoryDatum = {
   iteration: number;
-  withSkillTokens: number | null;
-  withoutSkillTokens: number | null;
-  withSkillSeconds: number | null;
-  withoutSkillSeconds: number | null;
+  primaryTokens: number | null;
+  baselineTokens: number | null;
+  primarySeconds: number | null;
+  baselineSeconds: number | null;
 };
 
-const C_WITH = "oklch(0.62 0.14 150)";
-const C_WITHOUT = "oklch(0.60 0.11 55)";
-
-const chartConfig = {
-  with_skill: { label: "with_skill", color: C_WITH },
-  without_skill: { label: "without_skill", color: C_WITHOUT },
-} satisfies ChartConfig;
+const C_PRIMARY = "oklch(0.62 0.14 150)";
+const C_BASELINE = "oklch(0.60 0.11 55)";
 
 type Metric = "tokens" | "seconds";
 
 export function ResourceTrajectoryGrid({
   data,
+  primaryLabel = "primary",
+  baselineLabel = "baseline",
 }: {
   data: ResourceTrajectoryDatum[];
+  primaryLabel?: string;
+  baselineLabel?: string;
 }) {
   if (data.length === 0) {
     return (
@@ -48,12 +47,16 @@ export function ResourceTrajectoryGrid({
         subtitle="mean per run"
         metric="tokens"
         data={data}
+        primaryLabel={primaryLabel}
+        baselineLabel={baselineLabel}
       />
       <ResourcePanel
         title="Time"
         subtitle="mean wall-clock per run"
         metric="seconds"
         data={data}
+        primaryLabel={primaryLabel}
+        baselineLabel={baselineLabel}
       />
     </div>
   );
@@ -64,21 +67,29 @@ function ResourcePanel({
   subtitle,
   metric,
   data,
+  primaryLabel,
+  baselineLabel,
 }: {
   title: string;
   subtitle: string;
   metric: Metric;
   data: ResourceTrajectoryDatum[];
+  primaryLabel: string;
+  baselineLabel: string;
 }) {
-  const withKey = metric === "tokens" ? "withSkillTokens" : "withSkillSeconds";
-  const withoutKey =
-    metric === "tokens" ? "withoutSkillTokens" : "withoutSkillSeconds";
+  const primaryKey = metric === "tokens" ? "primaryTokens" : "primarySeconds";
+  const baselineKey = metric === "tokens" ? "baselineTokens" : "baselineSeconds";
   const fmt = metric === "tokens" ? fmtTokens : fmtSeconds;
   const axisFmt = metric === "tokens" ? fmtTokens : fmtSecondsCompact;
 
+  const chartConfig = {
+    primary: { label: primaryLabel, color: C_PRIMARY },
+    baseline: { label: baselineLabel, color: C_BASELINE },
+  } satisfies ChartConfig;
+
   const latest = data[data.length - 1];
-  const latestWith = latest?.[withKey] ?? null;
-  const latestWithout = latest?.[withoutKey] ?? null;
+  const latestPrimary = latest?.[primaryKey] ?? null;
+  const latestBaseline = latest?.[baselineKey] ?? null;
 
   return (
     <div className="border-border bg-card flex flex-col border">
@@ -92,9 +103,9 @@ function ResourcePanel({
           </div>
         </div>
         <div className="flex flex-col items-end gap-0.5 font-mono tabular-nums">
-          <span className="text-xl font-medium">{fmt(latestWith)}</span>
+          <span className="text-xl font-medium">{fmt(latestPrimary)}</span>
           <span className="text-muted-foreground text-[10px] tracking-widest uppercase">
-            vs {fmt(latestWithout)}
+            vs {fmt(latestBaseline)}
           </span>
         </div>
       </div>
@@ -135,28 +146,28 @@ function ResourcePanel({
               domain={[0, "auto"]}
             />
             <Tooltip
-              content={<ResourceTooltip metric={metric} />}
+              content={<ResourceTooltip metric={metric} primaryLabel={primaryLabel} baselineLabel={baselineLabel} />}
               cursor={{ stroke: "var(--border)" }}
             />
             <Line
-              name="without_skill"
+              name={baselineLabel}
               type="monotone"
-              dataKey={withoutKey}
-              stroke={C_WITHOUT}
+              dataKey={baselineKey}
+              stroke={C_BASELINE}
               strokeWidth={1.5}
               strokeDasharray="4 3"
-              dot={{ r: 2.5, fill: C_WITHOUT, strokeWidth: 0 }}
+              dot={{ r: 2.5, fill: C_BASELINE, strokeWidth: 0 }}
               activeDot={{ r: 4.5, stroke: "var(--background)", strokeWidth: 1.5 }}
               isAnimationActive={false}
               connectNulls
             />
             <Line
-              name="with_skill"
+              name={primaryLabel}
               type="monotone"
-              dataKey={withKey}
-              stroke={C_WITH}
+              dataKey={primaryKey}
+              stroke={C_PRIMARY}
               strokeWidth={2}
-              dot={{ r: 3, fill: C_WITH, strokeWidth: 0 }}
+              dot={{ r: 3, fill: C_PRIMARY, strokeWidth: 0 }}
               activeDot={{ r: 5, stroke: "var(--background)", strokeWidth: 1.5 }}
               isAnimationActive={false}
               connectNulls
@@ -176,21 +187,25 @@ function ResourceTooltip({
   payload,
   label,
   metric,
+  primaryLabel,
+  baselineLabel,
 }: {
   active?: boolean;
   payload?: TooltipPayloadEntry[];
   label?: number;
   metric: Metric;
+  primaryLabel: string;
+  baselineLabel: string;
 }) {
   if (!active || !payload || payload.length === 0) return null;
   const datum = payload[0]?.payload;
   if (!datum) return null;
 
   const fmt = metric === "tokens" ? fmtTokens : fmtSeconds;
-  const withVal =
-    metric === "tokens" ? datum.withSkillTokens : datum.withSkillSeconds;
-  const withoutVal =
-    metric === "tokens" ? datum.withoutSkillTokens : datum.withoutSkillSeconds;
+  const primaryVal =
+    metric === "tokens" ? datum.primaryTokens : datum.primarySeconds;
+  const baselineVal =
+    metric === "tokens" ? datum.baselineTokens : datum.baselineSeconds;
 
   const row = (name: string, v: number | null, color: string) => (
     <div className="flex items-baseline justify-between gap-4 tabular-nums">
@@ -212,8 +227,8 @@ function ResourceTooltip({
         iteration #{label}
       </div>
       <div className="space-y-1 text-sm">
-        {row("with_skill", withVal, C_WITH)}
-        {row("without_skill", withoutVal, C_WITHOUT)}
+        {row(primaryLabel, primaryVal, C_PRIMARY)}
+        {row(baselineLabel, baselineVal, C_BASELINE)}
       </div>
     </div>
   );

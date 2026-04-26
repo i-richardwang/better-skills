@@ -7,10 +7,12 @@ import { checkUploadAuth } from "@/lib/upload-auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Variant names are user-chosen (declared in evals.json). Cap the length to
+// avoid pathological inputs landing in the runs.configuration text column.
 const incomingRunSchema = z.object({
   eval_id: z.number().int(),
-  eval_name: z.string().optional(),
-  configuration: z.enum(["with_skill", "without_skill"]),
+  eval_name: z.string().max(500).optional(),
+  configuration: z.string().min(1).max(200),
   run_number: z.number().int(),
   grading: z.any().optional(),
 });
@@ -23,7 +25,9 @@ const bodySchema = z.object({
   skill_md: z.string().optional(),
   git_commit_sha: z.string().optional(),
   hostname: z.string().optional(),
-  evals_definition: z.array(z.any()).optional(),
+  // evals_definition is the full evals.json (variants + defaults + cases) so
+  // the dashboard can render the case prompts that produced these results.
+  evals_definition: z.any().optional(),
 });
 
 type Body = z.infer<typeof bodySchema>;
@@ -62,29 +66,50 @@ function asObj(v: unknown): JsonObject {
     : {};
 }
 
+function variantSummary(rs: JsonObject, variant: string | null) {
+  if (!variant) {
+    return { passMean: null, passStddev: null, tokens: null, time: null };
+  }
+  const v = asObj(rs[variant]);
+  const pass = asObj(v.pass_rate);
+  const tok = asObj(v.tokens);
+  const tm = asObj(v.time_seconds);
+  return {
+    passMean: toNumericString(pass.mean),
+    passStddev: toNumericString(pass.stddev),
+    tokens: toReal(tok.mean),
+    time: toReal(tm.mean),
+  };
+}
+
 function extractIterationSummary(benchmark: unknown) {
   const b = asObj(benchmark);
-  const rs = asObj(b.run_summary);
-  const ws = asObj(rs.with_skill);
-  const wos = asObj(rs.without_skill);
-  const wsPass = asObj(ws.pass_rate);
-  const wsTok = asObj(ws.tokens);
-  const wsTime = asObj(ws.time_seconds);
-  const wosPass = asObj(wos.pass_rate);
-  const wosTok = asObj(wos.tokens);
-  const wosTime = asObj(wos.time_seconds);
   const meta = asObj(b.metadata);
+  const rs = asObj(b.run_summary);
+
+  const declaredVariants = toStringArray(meta.variants) ?? [];
+  const primary =
+    typeof meta.primary_variant === "string" ? meta.primary_variant : null;
+  const baseline =
+    typeof meta.baseline_variant === "string" ? meta.baseline_variant : null;
+
+  const p = variantSummary(rs, primary);
+  const bl = variantSummary(rs, baseline);
+
   const evalsRun = Array.isArray(meta.evals_run) ? meta.evals_run.length : null;
 
   return {
-    withSkillPassRateMean: toNumericString(wsPass.mean),
-    withSkillPassRateStddev: toNumericString(wsPass.stddev),
-    withoutSkillPassRateMean: toNumericString(wosPass.mean),
-    withoutSkillPassRateStddev: toNumericString(wosPass.stddev),
-    withSkillTokensMean: toReal(wsTok.mean),
-    withSkillTimeSecondsMean: toReal(wsTime.mean),
-    withoutSkillTokensMean: toReal(wosTok.mean),
-    withoutSkillTimeSecondsMean: toReal(wosTime.mean),
+    primaryVariant: primary,
+    baselineVariant: baseline,
+    variants: declaredVariants.length > 0 ? declaredVariants : null,
+    primaryPassRateMean: p.passMean,
+    primaryPassRateStddev: p.passStddev,
+    baselinePassRateMean: bl.passMean,
+    baselinePassRateStddev: bl.passStddev,
+    primaryTokensMean: p.tokens,
+    primaryTimeSecondsMean: p.time,
+    baselineTokensMean: bl.tokens,
+    baselineTimeSecondsMean: bl.time,
     runsPerConfiguration: toInt(meta.runs_per_configuration),
     evalsCount: evalsRun,
     notes: toStringArray(b.notes),
@@ -213,7 +238,7 @@ export async function POST(request: Request) {
         .update(schema.skills)
         .set({
           latestIterationNumber: iteration_number,
-          latestPassRate: iterSummary.withSkillPassRateMean,
+          latestPassRate: iterSummary.primaryPassRateMean,
           updatedAt: sql`now()`,
         })
         .where(eq(schema.skills.id, skillId));

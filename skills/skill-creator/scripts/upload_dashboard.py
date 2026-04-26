@@ -29,10 +29,6 @@ from pathlib import Path
 from typing import Optional
 
 
-# Fallback set for legacy iteration dirs without a manifest. New runs declare
-# their configs in iteration-N/manifest.json, so this is only used when manifest
-# is absent or has no `configs` field.
-DEFAULT_CONFIG_NAMES = {"with_skill", "without_skill", "new_skill", "old_skill"}
 MANIFEST_FILE = "manifest.json"
 
 
@@ -52,16 +48,6 @@ def _get_git_sha(path: Path) -> Optional[str]:
     return None
 
 
-def _normalize_configuration(name: str) -> Optional[str]:
-    """Map the four on-disk config names to the two dashboard values.
-    Improve-mode 'new_skill' / 'old_skill' collapse into with/without for storage."""
-    if name in ("with_skill", "new_skill"):
-        return "with_skill"
-    if name in ("without_skill", "old_skill"):
-        return "without_skill"
-    return None
-
-
 def _read_json(path: Path) -> Optional[dict]:
     try:
         return json.loads(path.read_text())
@@ -70,26 +56,31 @@ def _read_json(path: Path) -> Optional[dict]:
 
 
 def _allowed_configs(benchmark_dir: Path) -> set[str]:
-    """Configs to upload, preferring manifest's declared list."""
+    """Variant names to upload — read from the manifest (authoritative)."""
     manifest_path = benchmark_dir / MANIFEST_FILE
     manifest = _read_json(manifest_path)
-    if isinstance(manifest, dict):
-        configs = manifest.get("configs")
-        if isinstance(configs, list) and configs:
-            return set(configs)
-    return DEFAULT_CONFIG_NAMES
+    if not isinstance(manifest, dict):
+        raise FileNotFoundError(
+            f"manifest.json missing or unreadable at {manifest_path}; cannot determine "
+            f"which variants to upload"
+        )
+    configs = manifest.get("configs")
+    if not isinstance(configs, list) or not configs:
+        raise ValueError(
+            f"manifest.json at {manifest_path} has no 'configs' list"
+        )
+    return set(configs)
 
 
 def collect_runs(benchmark_dir: Path) -> list[dict]:
-    """Walk <benchmark_dir>/eval-*/[config]/run-*/grading.json and build the runs array."""
-    search_root = benchmark_dir / "runs"
-    if not search_root.exists():
-        search_root = benchmark_dir
+    """Walk <benchmark_dir>/eval-*/<variant>/run-*/grading.json and build the runs array.
 
+    Variant names are passed through to the dashboard as-is (no collapse / rename).
+    """
     allowed = _allowed_configs(benchmark_dir)
 
     runs: list[dict] = []
-    for eval_dir in sorted(search_root.glob("eval-*")):
+    for eval_dir in sorted(benchmark_dir.glob("eval-*")):
         try:
             eval_id = int(eval_dir.name.split("-", 1)[1])
         except (IndexError, ValueError):
@@ -103,9 +94,7 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
         for config_dir in sorted(p for p in eval_dir.iterdir() if p.is_dir()):
             if config_dir.name not in allowed:
                 continue
-            configuration = _normalize_configuration(config_dir.name)
-            if configuration is None:
-                continue
+            variant = config_dir.name
 
             for run_dir in sorted(config_dir.glob("run-*")):
                 try:
@@ -116,17 +105,18 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
                 runs.append({
                     "eval_id": eval_id,
                     "eval_name": eval_name,
-                    "configuration": configuration,
+                    "configuration": variant,
                     "run_number": run_number,
                     "grading": _read_json(run_dir / "grading.json"),
                 })
     return runs
 
 
-def _read_evals_definition(skill_path: Path) -> Optional[list]:
-    """Read evals.json's `evals` array (if present) for upload as iteration snapshot.
+def _read_evals_definition(skill_path: Path) -> Optional[dict]:
+    """Read evals.json for upload as iteration snapshot. Lets the dashboard
+    render the actual case prompts and variant declarations alongside results.
     Returns None on any failure; upload still proceeds without the field."""
-    evals_path = skill_path / "evals" / "evals.json"
+    evals_path = skill_path / "evals.json"
     if not evals_path.exists():
         return None
     try:
@@ -137,19 +127,13 @@ def _read_evals_definition(skill_path: Path) -> Optional[list]:
             file=sys.stderr,
         )
         return None
-    evals = data.get("evals") if isinstance(data, dict) else None
-    if evals is None:
+    if not isinstance(data, dict):
         print(
-            f"[dashboard] {evals_path} has no top-level 'evals' array; skipping definition upload",
-            file=sys.stderr,
-        )
-    elif not isinstance(evals, list):
-        print(
-            f"[dashboard] {evals_path} 'evals' is not an array; skipping definition upload",
+            f"[dashboard] {evals_path} is not a JSON object; skipping definition upload",
             file=sys.stderr,
         )
         return None
-    return evals if isinstance(evals, list) else None
+    return data
 
 
 def build_payload(

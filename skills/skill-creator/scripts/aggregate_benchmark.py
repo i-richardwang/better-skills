@@ -1,37 +1,21 @@
 #!/usr/bin/env python3
 """
-Aggregate individual run results into benchmark summary statistics.
+Aggregate per-run grading.json files into benchmark summary statistics.
 
-Reads grading.json files from run directories and produces:
-- run_summary with mean, stddev, min, max for each metric
-- delta between with_skill and without_skill configurations
+Reads `<iteration-dir>/manifest.json` to learn which variants exist (the
+manifest is authoritative — there is no glob fallback) and which is the
+primary / baseline (drives delta direction). Outputs benchmark.json + .md.
 
 Usage:
-    python aggregate_benchmark.py <benchmark_dir>
+    python aggregate_benchmark.py <iteration-dir>
 
-Example:
-    python aggregate_benchmark.py benchmarks/2026-01-15T10-30-00/
-
-The script supports two directory layouts:
-
-    Workspace layout (from skill-creator iterations):
-    <benchmark_dir>/
+Directory layout expected:
+    <iteration-dir>/
+    ├── manifest.json           (required — written by run_functional_eval)
     └── eval-N/
-        ├── with_skill/
-        │   ├── run-1/grading.json
-        │   └── run-2/grading.json
-        └── without_skill/
+        └── <variant-name>/
             ├── run-1/grading.json
             └── run-2/grading.json
-
-    Legacy layout (with runs/ subdirectory):
-    <benchmark_dir>/
-    └── runs/
-        └── eval-N/
-            ├── with_skill/
-            │   └── run-1/grading.json
-            └── without_skill/
-                └── run-1/grading.json
 """
 
 import argparse
@@ -45,20 +29,19 @@ from pathlib import Path
 MANIFEST_FILE = "manifest.json"
 
 
-def load_manifest(iteration_dir: Path) -> dict | None:
-    """Read iteration-N/manifest.json if present.
-
-    Manifest is the explicit handoff from run_functional_eval. When absent
-    (legacy workspaces or partial state), all consumers fall back to
-    directory globs — the on-disk layout is still the ultimate source of truth.
-    """
+def load_manifest(iteration_dir: Path) -> dict:
+    """Read iteration-N/manifest.json — the authoritative handoff from
+    run_functional_eval. Raises if missing or unreadable."""
     path = iteration_dir / MANIFEST_FILE
     if not path.exists():
-        return None
+        raise FileNotFoundError(
+            f"manifest.json not found at {path}. Re-run "
+            f"`python -m scripts.cli run` to produce it."
+        )
     try:
         return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
+    except (json.JSONDecodeError, OSError) as e:
+        raise ValueError(f"manifest.json at {path} is unreadable: {e}") from e
 
 
 def calculate_stats(values: list[float]) -> dict:
@@ -83,30 +66,20 @@ def calculate_stats(values: list[float]) -> dict:
     }
 
 
-def load_run_results(benchmark_dir: Path, allowed_configs: set[str] | None = None) -> dict:
+def load_run_results(benchmark_dir: Path, allowed_configs: set[str]) -> dict:
     """
-    Load all run results from a benchmark directory.
+    Load per-run grading.json files for the variants declared in the manifest.
 
-    Returns dict keyed by config name (e.g. "with_skill"/"without_skill",
-    or "new_skill"/"old_skill"), each containing a list of run results.
-
-    When `allowed_configs` is provided (typically from manifest.configs), only
-    those config dirs are considered — keeps stray directories like
-    `failed-runs/` from polluting `run_summary` and the delta calculation.
+    `allowed_configs` (the manifest's `configs` list) gates which directories
+    count as variants — anything else (failed-runs/, stray dirs) is ignored.
     """
-    # Support both layouts: eval dirs directly under benchmark_dir, or under runs/
-    runs_dir = benchmark_dir / "runs"
-    if runs_dir.exists():
-        search_dir = runs_dir
-    elif list(benchmark_dir.glob("eval-*")):
-        search_dir = benchmark_dir
-    else:
-        print(f"No eval directories found in {benchmark_dir} or {benchmark_dir / 'runs'}")
+    if not list(benchmark_dir.glob("eval-*")):
+        print(f"No eval directories found in {benchmark_dir}")
         return {}
 
     results: dict[str, list] = {}
 
-    for eval_idx, eval_dir in enumerate(sorted(search_dir.glob("eval-*"))):
+    for eval_idx, eval_dir in enumerate(sorted(benchmark_dir.glob("eval-*"))):
         metadata_path = eval_dir / "eval_metadata.json"
         if metadata_path.exists():
             try:
@@ -128,7 +101,7 @@ def load_run_results(benchmark_dir: Path, allowed_configs: set[str] | None = Non
             if not list(config_dir.glob("run-*")):
                 continue
             config = config_dir.name
-            if allowed_configs is not None and config not in allowed_configs:
+            if config not in allowed_configs:
                 continue
             if config not in results:
                 results[config] = []
@@ -198,33 +171,33 @@ def load_run_results(benchmark_dir: Path, allowed_configs: set[str] | None = Non
     return results
 
 
-PRIMARY_CONFIG_PREFERENCE = ("with_skill", "new_skill")
-BASELINE_CONFIG_PREFERENCE = ("without_skill", "old_skill")
-
-
-def _order_configs(configs: list[str]) -> list[str]:
-    """Sort configs so the primary (with_skill / new_skill) is index 0 and the
-    baseline (without_skill / old_skill) is index 1. This pins the delta sign:
-    delta = primary - baseline. Without this, alphabetical ordering puts
-    `old_skill` before `with_skill` and the delta inverts.
+def _order_configs(
+    configs: list[str],
+    primary: str | None,
+    baseline: str | None,
+) -> list[str]:
+    """Put primary first, baseline second, then everything else (in original order).
+    This pins the delta sign: delta = primary - baseline. Primary/baseline come
+    from the manifest (which got them from evals.json defaults), not a hardcoded list.
     """
-    primary = next((c for c in PRIMARY_CONFIG_PREFERENCE if c in configs), None)
-    baseline = next((c for c in BASELINE_CONFIG_PREFERENCE if c in configs), None)
-    head = [c for c in (primary, baseline) if c]
+    head = [c for c in (primary, baseline) if c and c in configs]
     rest = [c for c in configs if c not in head]
     return head + rest
 
 
-def aggregate_results(results: dict) -> dict:
+def aggregate_results(
+    results: dict,
+    primary_variant: str | None = None,
+    baseline_variant: str | None = None,
+) -> dict:
     """
     Aggregate run results into summary statistics.
 
-    Returns run_summary with stats for each configuration and delta. Configs
-    are reordered so primary (with_skill/new_skill) precedes baseline
-    (without_skill/old_skill) for a stable delta sign.
+    `primary_variant` and `baseline_variant` (from manifest) decide which configs
+    are placed at indices 0 and 1, pinning the delta sign as primary - baseline.
     """
     run_summary = {}
-    configs = _order_configs(list(results.keys()))
+    configs = _order_configs(list(results.keys()), primary_variant, baseline_variant)
 
     for config in configs:
         runs = results.get(config, [])
@@ -272,19 +245,24 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
     """
     Generate complete benchmark.json from run results.
 
-    If `<benchmark_dir>/manifest.json` exists, missing skill_name / skill_path /
-    model values are filled from it. Pure glob-based discovery still works
-    when no manifest is present (legacy / partial workspaces).
+    Reads `<benchmark_dir>/manifest.json` for variant names, primary/baseline
+    declarations, skill metadata, and replicate counts. Manifest is required —
+    if absent, raises FileNotFoundError.
     """
     manifest = load_manifest(benchmark_dir)
-    allowed_configs: set[str] | None = None
-    if manifest:
-        skill_name = skill_name or manifest.get("skill_name") or ""
-        skill_path = skill_path or manifest.get("skill_path") or ""
-        if isinstance(manifest.get("configs"), list) and manifest["configs"]:
-            allowed_configs = set(manifest["configs"])
+    skill_name = skill_name or manifest.get("skill_name") or ""
+    skill_path = skill_path or manifest.get("skill_path") or ""
+    configs = manifest.get("configs") or []
+    if not isinstance(configs, list) or not configs:
+        raise ValueError(
+            f"manifest.json at {benchmark_dir / MANIFEST_FILE} has no 'configs' list — "
+            f"cannot determine which variants to aggregate"
+        )
+    allowed_configs = set(configs)
+    primary_variant = manifest.get("primary_variant")
+    baseline_variant = manifest.get("baseline_variant")
     results = load_run_results(benchmark_dir, allowed_configs=allowed_configs)
-    run_summary = aggregate_results(results)
+    run_summary = aggregate_results(results, primary_variant, baseline_variant)
 
     # Build runs array for benchmark.json
     runs = []
@@ -315,18 +293,14 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
         for r in config
     ))
 
-    # Prefer the manifest's per-config replicate count when available — derives
-    # it from the max replicate seen across all manifest run entries (manifest
-    # is the planning source of truth, so missing runs don't shrink the count).
-    runs_per_config = 0
-    if manifest:
-        replicates = [
-            r.get("replicate", 0) for r in manifest.get("runs", [])
-            if isinstance(r, dict)
-        ]
-        runs_per_config = max(replicates) if replicates else 0
+    # Replicate count comes from the manifest (the planning source of truth, so
+    # missing runs don't shrink the count). Falls back to disk-observed max.
+    replicates = [
+        r.get("replicate", 0) for r in manifest.get("runs", [])
+        if isinstance(r, dict)
+    ]
+    runs_per_config = max(replicates) if replicates else 0
     if not runs_per_config:
-        # Fallback: assume contiguous numbering, derive from max run_number on disk.
         all_run_numbers = [
             r["run_number"]
             for config in results.values()
@@ -334,7 +308,7 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
         ]
         runs_per_config = max(all_run_numbers) if all_run_numbers else 0
 
-    executor_model = (manifest or {}).get("model") or "<model-name>"
+    executor_model = manifest.get("model") or "<model-name>"
 
     benchmark = {
         "metadata": {
@@ -344,7 +318,10 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
             "analyzer_model": "<model-name>",
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "evals_run": eval_ids,
-            "runs_per_configuration": runs_per_config
+            "runs_per_configuration": runs_per_config,
+            "variants": configs,
+            "primary_variant": primary_variant,
+            "baseline_variant": baseline_variant,
         },
         "runs": runs,
         "run_summary": run_summary,
@@ -359,7 +336,8 @@ def generate_markdown(benchmark: dict) -> str:
     metadata = benchmark["metadata"]
     run_summary = benchmark["run_summary"]
 
-    # Determine config names (excluding "delta")
+    # Determine config names (excluding "delta"). Order is set by aggregate_results
+    # so configs[0] is the primary, configs[1] is the baseline.
     configs = [k for k in run_summary if k != "delta"]
     config_a = configs[0] if len(configs) >= 1 else "config_a"
     config_b = configs[1] if len(configs) >= 2 else "config_b"

@@ -1,6 +1,5 @@
 import {
   pgTable,
-  pgEnum,
   serial,
   integer,
   text,
@@ -12,10 +11,8 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
-export const configurationEnum = pgEnum("configuration", [
-  "with_skill",
-  "without_skill",
-]);
+// Variant names are user-chosen (declared in evals.json) — stored as plain text
+// instead of a pgEnum so any naming scheme works.
 
 export const skills = pgTable(
   "skills",
@@ -43,27 +40,21 @@ export const iterations = pgTable(
       .references(() => skills.id, { onDelete: "cascade" }),
     iterationNumber: integer("iteration_number").notNull(),
 
-    withSkillPassRateMean: numeric("with_skill_pass_rate_mean", {
-      precision: 5,
-      scale: 4,
-    }),
-    withSkillPassRateStddev: numeric("with_skill_pass_rate_stddev", {
-      precision: 5,
-      scale: 4,
-    }),
-    withoutSkillPassRateMean: numeric("without_skill_pass_rate_mean", {
-      precision: 5,
-      scale: 4,
-    }),
-    withoutSkillPassRateStddev: numeric("without_skill_pass_rate_stddev", {
-      precision: 5,
-      scale: 4,
-    }),
+    // Variant declarations for this iteration (from evals.json defaults).
+    primaryVariant: text("primary_variant"),
+    baselineVariant: text("baseline_variant"),
+    variants: text("variants").array(),
 
-    withSkillTokensMean: real("with_skill_tokens_mean"),
-    withSkillTimeSecondsMean: real("with_skill_time_seconds_mean"),
-    withoutSkillTokensMean: real("without_skill_tokens_mean"),
-    withoutSkillTimeSecondsMean: real("without_skill_time_seconds_mean"),
+    // Aggregated metrics for the primary / baseline variants. Charts and
+    // top-level KPIs read from here.
+    primaryPassRateMean: numeric("primary_pass_rate_mean", { precision: 5, scale: 4 }),
+    primaryPassRateStddev: numeric("primary_pass_rate_stddev", { precision: 5, scale: 4 }),
+    baselinePassRateMean: numeric("baseline_pass_rate_mean", { precision: 5, scale: 4 }),
+    baselinePassRateStddev: numeric("baseline_pass_rate_stddev", { precision: 5, scale: 4 }),
+    primaryTokensMean: real("primary_tokens_mean"),
+    primaryTimeSecondsMean: real("primary_time_seconds_mean"),
+    baselineTokensMean: real("baseline_tokens_mean"),
+    baselineTimeSecondsMean: real("baseline_time_seconds_mean"),
 
     runsPerConfiguration: integer("runs_per_configuration"),
     evalsCount: integer("evals_count"),
@@ -94,7 +85,8 @@ export const runs = pgTable(
       .references(() => iterations.id, { onDelete: "cascade" }),
     evalId: integer("eval_id").notNull(),
     evalName: text("eval_name"),
-    configuration: configurationEnum("configuration").notNull(),
+    // Variant name as declared in evals.json — free text, no enum.
+    configuration: text("configuration").notNull(),
     runNumber: integer("run_number").notNull(),
 
     passRate: numeric("pass_rate", { precision: 5, scale: 4 }),

@@ -13,27 +13,35 @@ import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
 
 export type TrajectoryDatum = {
   iteration: number;
-  withSkill: number | null;
-  withSkillBandLow: number | null;
-  withSkillBandHigh: number | null;
-  withoutSkill: number | null;
-  withoutSkillBandLow: number | null;
-  withoutSkillBandHigh: number | null;
+  primary: number | null;
+  primaryBandLow: number | null;
+  primaryBandHigh: number | null;
+  baseline: number | null;
+  baselineBandLow: number | null;
+  baselineBandHigh: number | null;
 };
 
 type Props = {
   data: TrajectoryDatum[];
+  // Display labels — actual variant names from evals.json. Defaults are kept
+  // for the rare case where a caller doesn't know the variants.
+  primaryLabel?: string;
+  baselineLabel?: string;
 };
 
-const C_WITH = "oklch(0.62 0.14 150)";
-const C_WITHOUT = "oklch(0.60 0.11 55)";
+const C_PRIMARY = "oklch(0.62 0.14 150)";
+const C_BASELINE = "oklch(0.60 0.11 55)";
 
-const chartConfig = {
-  with_skill: { label: "with_skill", color: C_WITH },
-  without_skill: { label: "without_skill", color: C_WITHOUT },
-} satisfies ChartConfig;
+export function TrajectoryChart({
+  data,
+  primaryLabel = "primary",
+  baselineLabel = "baseline",
+}: Props) {
+  const chartConfig = {
+    primary: { label: primaryLabel, color: C_PRIMARY },
+    baseline: { label: baselineLabel, color: C_BASELINE },
+  } satisfies ChartConfig;
 
-export function TrajectoryChart({ data }: Props) {
   return (
     <ChartContainer config={chartConfig} className="aspect-auto h-80 w-full">
       <ComposedChart
@@ -41,13 +49,13 @@ export function TrajectoryChart({ data }: Props) {
         margin={{ top: 16, right: 16, bottom: 8, left: -8 }}
       >
           <defs>
-            <linearGradient id="band-with" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={C_WITH} stopOpacity={0.18} />
-              <stop offset="100%" stopColor={C_WITH} stopOpacity={0.04} />
+            <linearGradient id="band-primary" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C_PRIMARY} stopOpacity={0.18} />
+              <stop offset="100%" stopColor={C_PRIMARY} stopOpacity={0.04} />
             </linearGradient>
-            <linearGradient id="band-without" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={C_WITHOUT} stopOpacity={0.18} />
-              <stop offset="100%" stopColor={C_WITHOUT} stopOpacity={0.04} />
+            <linearGradient id="band-baseline" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C_BASELINE} stopOpacity={0.18} />
+              <stop offset="100%" stopColor={C_BASELINE} stopOpacity={0.04} />
             </linearGradient>
           </defs>
           <CartesianGrid
@@ -77,19 +85,19 @@ export function TrajectoryChart({ data }: Props) {
             axisLine={false}
             width={44}
           />
-          <Tooltip content={<ChartTooltip />} cursor={{ stroke: "var(--border)" }} />
+          <Tooltip content={<ChartTooltip primaryLabel={primaryLabel} baselineLabel={baselineLabel} />} cursor={{ stroke: "var(--border)" }} />
 
           <Area
             type="monotone"
-            dataKey="withSkillBandHigh"
+            dataKey="primaryBandHigh"
             stroke="none"
-            fill="url(#band-with)"
+            fill="url(#band-primary)"
             activeDot={false}
             isAnimationActive={false}
           />
           <Area
             type="monotone"
-            dataKey="withSkillBandLow"
+            dataKey="primaryBandLow"
             stroke="none"
             fill="var(--background)"
             activeDot={false}
@@ -97,15 +105,15 @@ export function TrajectoryChart({ data }: Props) {
           />
           <Area
             type="monotone"
-            dataKey="withoutSkillBandHigh"
+            dataKey="baselineBandHigh"
             stroke="none"
-            fill="url(#band-without)"
+            fill="url(#band-baseline)"
             activeDot={false}
             isAnimationActive={false}
           />
           <Area
             type="monotone"
-            dataKey="withoutSkillBandLow"
+            dataKey="baselineBandLow"
             stroke="none"
             fill="var(--background)"
             activeDot={false}
@@ -113,24 +121,24 @@ export function TrajectoryChart({ data }: Props) {
           />
 
           <Line
-            name="without_skill"
+            name={baselineLabel}
             type="monotone"
-            dataKey="withoutSkill"
-            stroke={C_WITHOUT}
+            dataKey="baseline"
+            stroke={C_BASELINE}
             strokeWidth={1.5}
             strokeDasharray="4 3"
-            dot={{ r: 3, fill: C_WITHOUT, strokeWidth: 0 }}
+            dot={{ r: 3, fill: C_BASELINE, strokeWidth: 0 }}
             activeDot={{ r: 5, stroke: "var(--background)", strokeWidth: 2 }}
             isAnimationActive={false}
             connectNulls
           />
           <Line
-            name="with_skill"
+            name={primaryLabel}
             type="monotone"
-            dataKey="withSkill"
-            stroke={C_WITH}
+            dataKey="primary"
+            stroke={C_PRIMARY}
             strokeWidth={2}
-            dot={{ r: 3.5, fill: C_WITH, strokeWidth: 0 }}
+            dot={{ r: 3.5, fill: C_PRIMARY, strokeWidth: 0 }}
             activeDot={{ r: 5.5, stroke: "var(--background)", strokeWidth: 2 }}
             isAnimationActive={false}
             connectNulls
@@ -150,10 +158,14 @@ function ChartTooltip({
   active,
   payload,
   label,
+  primaryLabel,
+  baselineLabel,
 }: {
   active?: boolean;
   payload?: TooltipPayloadEntry[];
   label?: number;
+  primaryLabel: string;
+  baselineLabel: string;
 }) {
   if (!active || !payload || payload.length === 0) return null;
   const datum = payload[0]?.payload;
@@ -197,18 +209,18 @@ function ChartTooltip({
       </div>
       <div className="space-y-1 text-sm">
         {row(
-          "with_skill",
-          datum.withSkill,
-          C_WITH,
-          datum.withSkillBandLow,
-          datum.withSkillBandHigh,
+          primaryLabel,
+          datum.primary,
+          C_PRIMARY,
+          datum.primaryBandLow,
+          datum.primaryBandHigh,
         )}
         {row(
-          "without_skill",
-          datum.withoutSkill,
-          C_WITHOUT,
-          datum.withoutSkillBandLow,
-          datum.withoutSkillBandHigh,
+          baselineLabel,
+          datum.baseline,
+          C_BASELINE,
+          datum.baselineBandLow,
+          datum.baselineBandHigh,
         )}
       </div>
     </div>

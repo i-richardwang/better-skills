@@ -14,8 +14,8 @@ import { fmtDelta, fmtPct } from "@/lib/format";
 
 export type PerEvalPoint = {
   iterationNumber: number;
-  withSkillMean: number | null;
-  withoutSkillMean: number | null;
+  primaryMean: number | null;
+  baselineMean: number | null;
 };
 
 export type PerEvalTrajectoryDatum = {
@@ -24,12 +24,12 @@ export type PerEvalTrajectoryDatum = {
   points: PerEvalPoint[];
 };
 
-const C_WITH = "oklch(0.62 0.14 150)";
-const C_WITHOUT = "oklch(0.60 0.11 55)";
+const C_PRIMARY = "oklch(0.62 0.14 150)";
+const C_BASELINE = "oklch(0.60 0.11 55)";
 
 const chartConfig = {
-  with_skill: { label: "with_skill", color: C_WITH },
-  without_skill: { label: "without_skill", color: C_WITHOUT },
+  primary: { label: "primary", color: C_PRIMARY },
+  baseline: { label: "baseline", color: C_BASELINE },
 } satisfies ChartConfig;
 
 export function PerEvalTrajectorySparkline({
@@ -43,8 +43,8 @@ export function PerEvalTrajectorySparkline({
   const latest = points[points.length - 1];
   const first = points[0];
   const delta =
-    latest?.withSkillMean != null && first?.withSkillMean != null
-      ? latest.withSkillMean - first.withSkillMean
+    latest?.primaryMean != null && first?.primaryMean != null
+      ? latest.primaryMean - first.primaryMean
       : null;
 
   const tile = (
@@ -60,7 +60,7 @@ export function PerEvalTrajectorySparkline({
         </div>
         <div className="flex flex-col items-end gap-0.5 font-mono tabular-nums">
           <span className="text-xl font-medium">
-            {fmtPct(latest?.withSkillMean ?? null, 0)}
+            {fmtPct(latest?.primaryMean ?? null, 0)}
           </span>
           {delta !== null ? (
             <span
@@ -107,21 +107,21 @@ export function PerEvalTrajectorySparkline({
             <Tooltip content={<MiniTooltip />} cursor={{ stroke: "var(--border)" }} />
             <Line
               type="monotone"
-              dataKey="withoutSkillMean"
-              stroke={C_WITHOUT}
+              dataKey="baselineMean"
+              stroke={C_BASELINE}
               strokeWidth={1.25}
               strokeDasharray="4 3"
-              dot={{ r: 2, fill: C_WITHOUT, strokeWidth: 0 }}
+              dot={{ r: 2, fill: C_BASELINE, strokeWidth: 0 }}
               activeDot={{ r: 4, stroke: "var(--background)", strokeWidth: 1.5 }}
               isAnimationActive={false}
               connectNulls
             />
             <Line
               type="monotone"
-              dataKey="withSkillMean"
-              stroke={C_WITH}
+              dataKey="primaryMean"
+              stroke={C_PRIMARY}
               strokeWidth={1.75}
-              dot={{ r: 2.5, fill: C_WITH, strokeWidth: 0 }}
+              dot={{ r: 2.5, fill: C_PRIMARY, strokeWidth: 0 }}
               activeDot={{ r: 4.5, stroke: "var(--background)", strokeWidth: 1.5 }}
               isAnimationActive={false}
               connectNulls
@@ -175,8 +175,8 @@ function MiniTooltip({ active, payload, label }: MiniTooltipProps) {
         iter #{label}
       </div>
       <div className="space-y-0.5 text-xs">
-        {row("with", d.withSkillMean, C_WITH)}
-        {row("without", d.withoutSkillMean, C_WITHOUT)}
+        {row("primary", d.primaryMean, C_PRIMARY)}
+        {row("baseline", d.baselineMean, C_BASELINE)}
       </div>
     </div>
   );

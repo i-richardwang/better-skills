@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Run functional evals for a skill via `claude -p` subprocess.
 
-For each eval in evals.json, spawns two `claude -p` subprocesses in parallel:
-- with_skill: runs the task with the skill being tested
-- baseline: either no skill (new-skill mode) or the old-skill snapshot (improving mode)
+Reads variants and cases from evals.json (see scripts/config.py for the schema).
+For each (case × variant), spawns a `claude -p` executor in parallel. After
+all executors complete, spawns a grader subprocess per run that evaluates
+expectations against the transcript + outputs.
 
-After executors complete, spawns a grader subprocess per run that evaluates
-expectations against the transcript + outputs. Writes per-run directories with
-transcript.jsonl, timing.json, grading.json. Outputs a summary JSON to stdout.
+Variants are data: each variant declares a `mount` (self/none/snapshot/path)
+that decides what skill, if any, is attached for that comparison branch. There
+are no hardcoded "with_skill"/"without_skill" strings in this script.
 
-Collapses what used to be 6N agent-written bash calls (spawn + timing + grader
-per run) into a single script call. Same spawn semantics as the previous
-SKILL.md Step 1/3/4 template — stream-json + verbose, bypassPermissions,
-timeout 600, env inherits everything except CLAUDECODE.
+Same spawn semantics as before — stream-json + verbose, bypassPermissions,
+env inherits everything except CLAUDECODE so `claude -p` can nest inside a
+Claude Code session.
 """
 
 import argparse
@@ -25,6 +25,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from .config import EvalsConfig, VariantConfig, load_evals_config
+except ImportError:
+    from config import EvalsConfig, VariantConfig, load_evals_config  # type: ignore
 
 
 DEFAULT_TIMEOUT = 600
@@ -175,21 +180,32 @@ def _build_manifest_skeleton(
     skill_name: str,
     skill_path: Path,
     snapshot_path: Path | None,
-    baseline_mode: str,
+    primary_variant: str,
+    baseline_variant: str | None,
     evals_json: Path,
     model: str | None,
     runs: list[dict],
     iteration_dir: Path,
 ) -> dict:
-    """Construct the initial manifest with all planned runs marked pending."""
-    configs = sorted({r["variant"] for r in runs})
+    """Construct the initial manifest with all planned runs marked pending.
+
+    `primary_variant` and `baseline_variant` come from the evals.json defaults
+    block; downstream consumers (aggregate_benchmark, dashboard) read them
+    instead of guessing from a hardcoded preference list.
+    """
+    # Preserve the order in which variants first appear so iteration is stable.
+    configs: list[str] = []
+    for r in runs:
+        if r["variant"] not in configs:
+            configs.append(r["variant"])
     return {
         "version": MANIFEST_VERSION,
         "iteration": iteration,
         "skill_name": skill_name,
         "skill_path": str(skill_path),
         "snapshot_path": str(snapshot_path) if snapshot_path else None,
-        "baseline_mode": baseline_mode,
+        "primary_variant": primary_variant,
+        "baseline_variant": baseline_variant,
         "evals_json_path": str(evals_json),
         "model": model,
         "configs": configs,
@@ -484,75 +500,83 @@ def run_grader(
     }
 
 
+def _resolve_mount(
+    variant: VariantConfig,
+    skill_path: Path,
+    snapshot_path: Path | None,
+) -> Path | None:
+    """Resolve a variant's mount declaration into an actual on-disk skill path
+    (or None for mount=none)."""
+    if variant.mount == "self":
+        return skill_path
+    if variant.mount == "none":
+        return None
+    if variant.mount == "snapshot":
+        if snapshot_path is None:
+            raise RuntimeError(
+                f"variant '{variant.name}' uses mount=snapshot but no snapshot_path was "
+                f"provided. Pass --snapshot-path or rely on the workspace default."
+            )
+        return snapshot_path
+    if variant.mount == "path":
+        assert variant.path
+        return Path(variant.path).expanduser().resolve()
+    raise ValueError(f"unknown mount type: {variant.mount}")
+
+
 def plan_runs(
-    evals: list[dict],
+    config: EvalsConfig,
     workspace: Path,
     iteration: int,
     skill_path: Path,
-    baseline_mode: str,
     snapshot_path: Path | None,
     default_timeout: int,
     runs_per_config: int,
 ) -> list[dict]:
-    """Expand evals into per-run specs. Writes eval_metadata.json into each eval dir.
+    """Expand cases × variants into per-run specs. Writes eval_metadata.json into each eval dir.
 
-    Directory layout matches aggregate_benchmark.py expectations:
-      iteration-N/eval-<id>/<config>/run-<k>/{transcript.jsonl, timing.json, grading.json, outputs/}
+    Directory layout:
+      iteration-N/eval-<id>/<variant-name>/run-<k>/{transcript.jsonl, timing.json, grading.json, outputs/}
 
-    Eval dirs are always `eval-<id>` (not user-chosen names) so the aggregator's
-    `eval-*` glob picks them up. Descriptive names live in eval_metadata.json.
+    Variant names come from the config (no hardcoded with_skill/without_skill); the
+    aggregator discovers them via manifest.configs.
     """
     iteration_dir = workspace / f"iteration-{iteration}"
-    runs = []
-    for ev in evals:
-        eval_id = ev["id"]
-        eval_dir = iteration_dir / f"eval-{eval_id}"
+    runs: list[dict] = []
+    for case in config.cases:
+        eval_dir = iteration_dir / f"eval-{case.id}"
         eval_dir.mkdir(parents=True, exist_ok=True)
 
+        prompt = config.resolve_prompt(case, skill_path)
+        eval_name = case.name or f"eval-{case.id}"
+        expectations = list(case.expectations)
+
         metadata = {
-            "eval_id": eval_id,
-            "eval_name": ev.get("name") or f"eval-{eval_id}",
-            "prompt": ev["prompt"],
-            "assertions": ev.get("expectations", []),
+            "eval_id": case.id,
+            "eval_name": eval_name,
+            "prompt": prompt,
+            "assertions": expectations,
         }
         (eval_dir / "eval_metadata.json").write_text(json.dumps(metadata, indent=2))
 
         common = {
-            "eval_id": eval_id,
-            "eval_name": metadata["eval_name"],
-            "prompt": ev["prompt"],
-            "files": ev.get("files", []),
-            "expectations": ev.get("expectations", []),
-            "timeout": ev.get("timeout", default_timeout),
+            "eval_id": case.id,
+            "eval_name": eval_name,
+            "prompt": prompt,
+            "files": list(case.files),
+            "expectations": expectations,
+            "timeout": case.timeout_s or default_timeout,
         }
 
         for k in range(1, runs_per_config + 1):
-            runs.append({
-                **common,
-                "variant": "with_skill",
-                "run_number": k,
-                "run_dir": eval_dir / "with_skill" / f"run-{k}",
-                "skill_path": skill_path,
-            })
-
-            if baseline_mode == "without_skill":
+            for variant in config.variants:
                 runs.append({
                     **common,
-                    "variant": "without_skill",
+                    "variant": variant.name,
                     "run_number": k,
-                    "run_dir": eval_dir / "without_skill" / f"run-{k}",
-                    "skill_path": None,
+                    "run_dir": eval_dir / variant.name / f"run-{k}",
+                    "skill_path": _resolve_mount(variant, skill_path, snapshot_path),
                 })
-            elif baseline_mode == "old_skill":
-                runs.append({
-                    **common,
-                    "variant": "old_skill",
-                    "run_number": k,
-                    "run_dir": eval_dir / "old_skill" / f"run-{k}",
-                    "skill_path": snapshot_path,
-                })
-            else:
-                raise ValueError(f"Unknown baseline_mode: {baseline_mode}")
 
     return runs
 
@@ -736,28 +760,39 @@ def run_all(
     skill_path: Path,
     workspace: Path,
     iteration: int,
-    baseline_mode: str,
     snapshot_path: Path | None = None,
-    num_workers: int = DEFAULT_WORKERS,
-    default_timeout: int = DEFAULT_TIMEOUT,
-    runs_per_config: int = 1,
+    num_workers: int | None = None,
+    default_timeout: int | None = None,
+    runs_per_config: int | None = None,
     model: str | None = None,
     phase: str = "all",
     grader_md: Path | None = None,
     resume: bool = False,
     skill_name: str | None = None,
 ) -> dict:
-    """Library entry point: plan + (optionally) snapshot + execute + grade + write manifest.
+    """Library entry point: load config + plan + (optionally) snapshot + execute + grade + write manifest.
 
-    Returns a summary dict matching the CLI stdout shape, plus a `manifest_path` field.
-    Used directly by iterate.py and any other orchestrator. main() is a thin shim that
-    parses argparse and delegates here.
+    `evals_json` is the new-format config (see scripts/config.py). Variants and
+    defaults come from there; CLI arguments override the config defaults when
+    provided. Used directly by the `skill-eval` CLI dispatcher.
     """
     evals_json = Path(evals_json).resolve()
     skill_path = Path(skill_path).resolve()
     workspace = Path(workspace).resolve()
 
-    if baseline_mode == "old_skill":
+    config = load_evals_config(evals_json)
+
+    # CLI overrides win over config defaults.
+    num_workers = num_workers if num_workers is not None else config.defaults.num_workers
+    default_timeout = default_timeout if default_timeout is not None else config.defaults.timeout_s
+    runs_per_config = runs_per_config if runs_per_config is not None else config.defaults.runs_per_variant
+    skill_name = skill_name or config.skill_name or skill_path.name
+    model = model or config.default_model
+
+    # Auto-snapshot whenever any variant uses mount=snapshot. Workspace default
+    # is <workspace>/skill-snapshot/. Existing snapshots are never overwritten.
+    needs_snapshot = any(v.mount == "snapshot" for v in config.variants)
+    if needs_snapshot:
         if snapshot_path is None:
             snapshot_path = workspace / "skill-snapshot"
         snapshot_path = Path(snapshot_path).resolve()
@@ -765,15 +800,11 @@ def run_all(
     elif snapshot_path is not None:
         snapshot_path = Path(snapshot_path).resolve()
 
-    evals_data = json.loads(evals_json.read_text())
-    evals = evals_data.get("evals", [])
-
     runs = plan_runs(
-        evals=evals,
+        config=config,
         workspace=workspace,
         iteration=iteration,
         skill_path=skill_path,
-        baseline_mode=baseline_mode,
         snapshot_path=snapshot_path,
         default_timeout=default_timeout,
         runs_per_config=runs_per_config,
@@ -782,10 +813,11 @@ def run_all(
     iteration_dir = workspace / f"iteration-{iteration}"
     manifest = _build_manifest_skeleton(
         iteration=iteration,
-        skill_name=skill_name or skill_path.name,
+        skill_name=skill_name,
         skill_path=skill_path,
         snapshot_path=snapshot_path,
-        baseline_mode=baseline_mode,
+        primary_variant=config.defaults.primary_variant,
+        baseline_variant=config.defaults.baseline_variant,
         evals_json=evals_json,
         model=model,
         runs=runs,
@@ -799,8 +831,8 @@ def run_all(
     manifest_path = _write_manifest(iteration_dir, manifest)
 
     print(
-        f"[plan] {len(evals)} evals, {len(runs)} executor runs, phase={phase}, "
-        f"resume={resume}",
+        f"[plan] {len(config.cases)} cases × {len(config.variants)} variants = "
+        f"{len(runs)} executor runs, phase={phase}, resume={resume}",
         file=sys.stderr,
         flush=True,
     )
@@ -854,10 +886,12 @@ def run_all(
         "iteration_dir": str(iteration_dir),
         "manifest_path": str(manifest_path),
         "skill_path": str(skill_path),
-        "baseline_mode": baseline_mode,
         "snapshot_path": str(snapshot_path) if snapshot_path else None,
+        "primary_variant": config.defaults.primary_variant,
+        "baseline_variant": config.defaults.baseline_variant,
+        "variants": [v.name for v in config.variants],
         "phase": phase,
-        "num_evals": len(evals),
+        "num_evals": len(config.cases),
         "num_runs": len(runs),
         "executors": [_serialize_executor_result(r) for r in executor_results],
         "graders": grader_results,
@@ -865,28 +899,32 @@ def run_all(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run functional evals via claude -p")
-    parser.add_argument("--evals-json", required=True, help="Path to evals.json")
-    parser.add_argument("--skill-path", required=True, help="Path to skill directory (with_skill variant)")
+    parser = argparse.ArgumentParser(
+        description="Run functional evals via claude -p. Variants come from evals.json.",
+    )
+    parser.add_argument("--evals-json", required=True, help="Path to evals.json (new schema; see scripts/config.py)")
+    parser.add_argument("--skill-path", required=True, help="Path to the skill being iterated on (mount=self target)")
     parser.add_argument("--workspace", required=True, help="Workspace directory; iteration-N/ goes inside")
     parser.add_argument("--iteration", type=int, required=True)
-    parser.add_argument("--baseline-mode", choices=["without_skill", "old_skill"], required=True)
     parser.add_argument("--snapshot-path", default=None,
-                        help="Path to old-skill snapshot. When --baseline-mode=old_skill and this is omitted, "
-                             "defaults to <workspace>/skill-snapshot/, auto-created from --skill-path if missing.")
-    parser.add_argument("--num-workers", type=int, default=DEFAULT_WORKERS)
-    parser.add_argument("--default-timeout", type=int, default=DEFAULT_TIMEOUT)
-    parser.add_argument("--runs-per-config", type=int, default=1,
-                        help="Replicate each eval/config N times for variance analysis (default 1)")
-    parser.add_argument("--model", default=None)
+                        help="Path to skill snapshot. Used by any variant with mount=snapshot. "
+                             "Defaults to <workspace>/skill-snapshot/, auto-created from --skill-path if missing.")
+    parser.add_argument("--num-workers", type=int, default=None,
+                        help="Override evals.json defaults.num_workers")
+    parser.add_argument("--default-timeout", type=int, default=None,
+                        help="Override evals.json defaults.timeout_s")
+    parser.add_argument("--runs-per-config", type=int, default=None,
+                        help="Override evals.json defaults.runs_per_variant")
+    parser.add_argument("--model", default=None,
+                        help="Override evals.json default_model")
     parser.add_argument("--phase", choices=["all", "executor", "grader"], default="all",
                         help="'executor' only runs Step 1+3, 'grader' only runs Step 4 (expects existing transcripts).")
     parser.add_argument("--grader-md", default=None, help="Path to grader.md (default: <this-script>/../agents/grader.md)")
     parser.add_argument("--resume", action="store_true",
-                        help="Skip runs already at-least 'executed' (executor phase) or 'graded' (grader phase). "
-                             "State is read from each run dir's run_status.json.")
+                        help="Skip runs whose transcript already shows executor success "
+                             "(or grading.json exists, for the grader phase). Crash-safe.")
     parser.add_argument("--skill-name", default=None,
-                        help="Skill identifier recorded in the manifest. Defaults to the skill directory name.")
+                        help="Override evals.json skill_name (which defaults to the skill directory name).")
     args = parser.parse_args()
 
     summary = run_all(
@@ -894,7 +932,6 @@ def main():
         skill_path=Path(args.skill_path),
         workspace=Path(args.workspace),
         iteration=args.iteration,
-        baseline_mode=args.baseline_mode,
         snapshot_path=Path(args.snapshot_path) if args.snapshot_path else None,
         num_workers=args.num_workers,
         default_timeout=args.default_timeout,
@@ -910,3 +947,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

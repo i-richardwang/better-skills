@@ -15,8 +15,22 @@ const TrajectoryChart = dynamic(
   },
 );
 
-export function TrajectoryChartClient({ data }: { data: TrajectoryDatum[] }) {
-  return <TrajectoryChart data={data} />;
+export function TrajectoryChartClient({
+  data,
+  primaryLabel,
+  baselineLabel,
+}: {
+  data: TrajectoryDatum[];
+  primaryLabel?: string;
+  baselineLabel?: string;
+}) {
+  return (
+    <TrajectoryChart
+      data={data}
+      primaryLabel={primaryLabel}
+      baselineLabel={baselineLabel}
+    />
+  );
 }
 
 export type { TrajectoryDatum };

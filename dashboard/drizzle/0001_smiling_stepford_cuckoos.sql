@@ -1,1 +1,0 @@
-ALTER TABLE "iterations" ADD COLUMN "evals_definition" jsonb;

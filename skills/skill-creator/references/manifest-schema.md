@@ -1,14 +1,13 @@
 # Iteration manifest schema
 
 Each `iteration-N/` directory contains a `manifest.json` written by
-`run_functional_eval.run_all` (and `iterate.py`). The manifest is the
-explicit handoff between scripts in the pipeline — `aggregate_benchmark.py`,
-`upload_dashboard.py`, and any other downstream tool reads it instead of
-relying on glob-based directory walks. The on-disk run dirs remain the
-ultimate source of truth; manifest is a fast index.
+`run_functional_eval.run_all`. The manifest is the **authoritative** handoff
+between scripts in the pipeline — `aggregate_benchmark.py`,
+`upload_dashboard.py`, and any other downstream tool **require** it.
 
-When a manifest is absent (e.g. a workspace produced before this format
-existed), all consumers fall back to glob discovery.
+The on-disk run dirs remain the ultimate source of truth for per-run results;
+the manifest is the index that tells consumers which variants exist, which is
+primary/baseline, and where to find each run.
 
 ## File layout
 
@@ -40,11 +39,12 @@ existed), all consumers fall back to glob discovery.
   "iteration": 3,
   "skill_name": "my-skill",
   "skill_path": "/abs/path/to/skill",
-  "snapshot_path": "/abs/path/to/skill-snapshot",   // null when baseline=without_skill
-  "baseline_mode": "old_skill",                      // "without_skill" | "old_skill"
+  "snapshot_path": "/abs/path/to/skill-snapshot",   // null if no variant uses mount=snapshot
+  "primary_variant": "with_skill",                   // from evals.json defaults
+  "baseline_variant": "without_skill",               // from evals.json defaults; nullable
   "evals_json_path": "/abs/path/to/evals.json",
   "model": "claude-opus-4-7",                        // null if not set
-  "configs": ["with_skill", "old_skill"],            // declared variant names
+  "configs": ["with_skill", "without_skill"],        // variant names, order = evals.json variants[]
   "created_at": "2026-04-26T12:00:00+00:00",
   "updated_at": "2026-04-26T12:42:13+00:00",
   "runs": [
@@ -52,7 +52,7 @@ existed), all consumers fall back to glob discovery.
       "id": "eval-1-with_skill-run-1",
       "eval_id": 1,
       "eval_name": "first eval",
-      "config": "with_skill",
+      "config": "with_skill",                        // matches one of `configs[]`
       "replicate": 1,
       "path": "eval-1/with_skill/run-1",            // relative to iteration dir
       "status": "graded",                            // see status states below
@@ -75,9 +75,13 @@ existed), all consumers fall back to glob discovery.
 
 ### Field notes
 
-- **`configs`** drives `upload_dashboard.collect_runs` — only directories
-  whose names appear here are considered for upload. Without a manifest the
-  uploader falls back to a hardcoded set of the four known config names.
+- **`configs`** is the authoritative list of variant directory names for this
+  iteration. It comes from the order of `variants[]` in evals.json and gates
+  what `aggregate_benchmark` and `upload_dashboard` consider — stray dirs
+  (failed-runs/, scratch/) are ignored.
+- **`primary_variant` / `baseline_variant`** come from `evals.json`'s
+  `defaults` block. They pin the delta direction (`delta = primary - baseline`)
+  so reordering variants in evals.json doesn't accidentally invert the sign.
 - **`runs[].path`** is always relative to the iteration dir, so manifests are
   movable across machines as long as the on-disk layout travels with them.
 - **`runs[]` per-run metrics** (`executor_duration_s`, `tokens`, `pass_rate`,
@@ -139,14 +143,3 @@ display, not for resume gating.
    and rebuilds the manifest's per-run entries. Idempotent — safe to call
    multiple times.
 
-## Backward compatibility
-
-Existing workspaces produced before manifests will not have one. Every
-consumer falls back to glob discovery in that case:
-
-- `aggregate_benchmark.load_run_results` — already discovers configs
-  dynamically by listing iteration subdirectories.
-- `upload_dashboard.collect_runs` — falls back to
-  `DEFAULT_CONFIG_NAMES = {with_skill, without_skill, new_skill, old_skill}`.
-
-So manifest is purely additive — no migration required.
