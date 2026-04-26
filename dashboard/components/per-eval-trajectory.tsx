@@ -80,9 +80,9 @@ export function PerEvalTrajectorySparkline({
       </div>
       <ChartContainer
         config={chartConfig}
-        className="aspect-auto h-28 w-full px-1 py-1"
+        className="aspect-auto h-40 w-full px-1 py-1"
       >
-        <LineChart data={points} margin={{ top: 6, right: 10, bottom: 0, left: -20 }}>
+        <LineChart data={points} margin={{ top: 6, right: 10, bottom: 0, left: 4 }}>
             <CartesianGrid
               stroke="var(--border)"
               strokeDasharray="2 4"
@@ -101,17 +101,9 @@ export function PerEvalTrajectorySparkline({
               axisLine={{ stroke: "var(--border)" }}
               interval="preserveStartEnd"
             />
-            <YAxis
-              domain={[0, 1]}
-              stroke="var(--muted-foreground)"
-              fontSize={9}
-              fontFamily="var(--font-mono)"
-              tickFormatter={(v) => `${Math.round(v * 100)}`}
-              tickLine={false}
-              axisLine={false}
-              ticks={[0, 0.5, 1]}
-              width={30}
-            />
+            {/* Sparkline: headline already shows latest %, scale is implicit
+                [0,1]. Hide axis to reclaim width — keep YAxis for grid ticks. */}
+            <YAxis domain={[0, 1]} ticks={[0, 0.5, 1]} hide />
             <Tooltip content={<MiniTooltip />} cursor={{ stroke: "var(--border)" }} />
             <Line
               type="monotone"

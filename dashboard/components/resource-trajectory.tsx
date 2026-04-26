@@ -9,7 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
-import { fmtSeconds, fmtTokens } from "@/lib/format";
+import { fmtSeconds, fmtSecondsCompact, fmtTokens } from "@/lib/format";
 
 export type ResourceTrajectoryDatum = {
   iteration: number;
@@ -74,6 +74,7 @@ function ResourcePanel({
   const withoutKey =
     metric === "tokens" ? "withoutSkillTokens" : "withoutSkillSeconds";
   const fmt = metric === "tokens" ? fmtTokens : fmtSeconds;
+  const axisFmt = metric === "tokens" ? fmtTokens : fmtSecondsCompact;
 
   const latest = data[data.length - 1];
   const latestWith = latest?.[withKey] ?? null;
@@ -127,10 +128,10 @@ function ResourcePanel({
               stroke="var(--muted-foreground)"
               fontSize={10}
               fontFamily="var(--font-mono)"
-              tickFormatter={(v) => fmt(v)}
+              tickFormatter={(v) => axisFmt(v)}
               tickLine={false}
               axisLine={false}
-              width={48}
+              width={40}
               domain={[0, "auto"]}
             />
             <Tooltip

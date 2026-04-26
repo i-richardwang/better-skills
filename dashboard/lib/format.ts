@@ -29,6 +29,18 @@ export function fmtSeconds(v: number | null | undefined): string {
   return `${m}m ${s.toString().padStart(2, "0")}s`;
 }
 
+// Whitespace-free duration for chart axis ticks. SVG <text> wraps on spaces,
+// so axis labels must be a single token: 45s, 2m, 1.5h.
+export function fmtSecondsCompact(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  if (v < 60) return `${Math.round(v)}s`;
+  if (v < 3600) {
+    const m = v / 60;
+    return `${(m < 10 ? m.toFixed(1) : m.toFixed(0)).replace(/\.0$/, "")}m`;
+  }
+  return `${(v / 3600).toFixed(1).replace(/\.0$/, "")}h`;
+}
+
 export function fmtRelative(d: Date | string | null | undefined): string {
   if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
