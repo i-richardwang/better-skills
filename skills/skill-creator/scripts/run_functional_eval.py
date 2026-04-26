@@ -25,10 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    from .config import EvalsConfig, VariantConfig, load_evals_config
-except ImportError:
-    from config import EvalsConfig, VariantConfig, load_evals_config  # type: ignore
+from .config import EvalsConfig, VariantConfig, load_evals_config
 
 
 DEFAULT_TIMEOUT = 600

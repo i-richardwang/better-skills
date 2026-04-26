@@ -28,6 +28,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from .config import ConfigError, load_evals_config
+
 
 MANIFEST_FILE = "manifest.json"
 
@@ -115,25 +117,18 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
 def _read_evals_definition(skill_path: Path) -> Optional[dict]:
     """Read evals.json for upload as iteration snapshot. Lets the dashboard
     render the actual case prompts and variant declarations alongside results.
+
+    Goes through the pydantic loader so the upload payload is the schema's
+    canonical shape — never raw user fields outside the declared schema.
     Returns None on any failure; upload still proceeds without the field."""
     evals_path = skill_path / "evals.json"
     if not evals_path.exists():
         return None
     try:
-        data = json.loads(evals_path.read_text())
-    except Exception as e:
-        print(
-            f"[dashboard] could not parse {evals_path}: {type(e).__name__}: {e}",
-            file=sys.stderr,
-        )
+        return load_evals_config(evals_path).model_dump(exclude_none=True)
+    except ConfigError as e:
+        print(f"[dashboard] {e}", file=sys.stderr)
         return None
-    if not isinstance(data, dict):
-        print(
-            f"[dashboard] {evals_path} is not a JSON object; skipping definition upload",
-            file=sys.stderr,
-        )
-        return None
-    return data
 
 
 def build_payload(

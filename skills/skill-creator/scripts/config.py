@@ -65,7 +65,7 @@ class FunctionalDefaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     primary_variant: str = Field(..., description="Variant whose results are the 'main' figure; delta = primary - baseline.")
-    baseline_variant: str | None = Field(None, description="Variant the primary is compared against. None = no delta computed.")
+    baseline_variant: str = Field(..., description="Variant the primary is compared against. Required: the comparison framing is what the dashboard, viewer, and benchmark.md all assume.")
     runs_per_variant: int = Field(1, ge=1, description="Replicate each (case × variant) N times for variance.")
     timeout_s: int = Field(600, ge=1, description="Default per-run timeout in seconds.")
     num_workers: int = Field(4, ge=1, description="Parallel subprocess workers.")
@@ -113,7 +113,7 @@ class EvalsConfig(BaseModel):
             raise ValueError(
                 f"defaults.primary_variant '{self.defaults.primary_variant}' not in variants {sorted(names)}"
             )
-        if self.defaults.baseline_variant and self.defaults.baseline_variant not in names:
+        if self.defaults.baseline_variant not in names:
             raise ValueError(
                 f"defaults.baseline_variant '{self.defaults.baseline_variant}' not in variants {sorted(names)}"
             )

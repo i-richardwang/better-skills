@@ -135,10 +135,23 @@ function buildBenchmarkRunMap(benchmark: unknown) {
   return map;
 }
 
+// Single guard for every unbounded jsonb in the payload (raw_benchmark,
+// evals_definition, runs[].grading). Cheaper than per-field caps and covers
+// future fields by default.
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
+
 export async function POST(request: Request) {
   const auth = checkUploadAuth(request);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.message }, { status: auth.status });
+  }
+
+  const declaredLength = Number(request.headers.get("content-length") ?? 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    return NextResponse.json(
+      { error: `Body too large (${declaredLength} > ${MAX_BODY_BYTES} bytes)` },
+      { status: 413 },
+    );
   }
 
   let parsed: Body;

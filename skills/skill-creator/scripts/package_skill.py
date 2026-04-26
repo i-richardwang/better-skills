@@ -14,7 +14,7 @@ import fnmatch
 import sys
 import zipfile
 from pathlib import Path
-from scripts.quick_validate import validate_skill
+from .quick_validate import validate_skill
 
 # Patterns to exclude when packaging skills.
 EXCLUDE_DIRS = {"__pycache__", "node_modules"}

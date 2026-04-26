@@ -15,8 +15,8 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from scripts.config import find_triggers_config, load_triggers_config
-from scripts.utils import parse_skill_md
+from .config import find_triggers_config, load_triggers_config
+from .utils import parse_skill_md
 
 
 def find_project_root() -> Path:
