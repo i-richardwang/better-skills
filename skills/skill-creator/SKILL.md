@@ -164,11 +164,17 @@ See `references/schemas.md` for the full schema (including the `assertions` fiel
 
 This section is one continuous sequence — don't stop partway through. Do NOT use `/skill-test` or any other testing skill.
 
-Put results in `<skill-name>-workspace/` as a sibling to the skill directory. Within the workspace, the runner script builds this layout (you don't need to create anything upfront — the script does it):
+Put results in `<skill-name>-workspace/` as a sibling to the skill directory. The default flow uses **one orchestrator command** that handles snapshot creation, executor + grader runs, aggregation, and viewer launch. Underneath it sits the same set of scripts you can drop down to for advanced cases (single-phase reruns, just re-aggregating, etc.).
+
+The on-disk layout the orchestrator builds:
 
 ```
 <skill-name>-workspace/
 └── iteration-<N>/
+    ├── manifest.json                   (index of all runs, see references/manifest-schema.md)
+    ├── benchmark.json                  (after aggregation)
+    ├── benchmark.md
+    ├── viewer.log                      (when viewer launched in background)
     └── eval-<id>/
         ├── eval_metadata.json          (regenerated from evals.json each run)
         ├── with_skill/
@@ -178,53 +184,63 @@ Put results in `<skill-name>-workspace/` as a sibling to the skill directory. Wi
         │       ├── timing.json
         │       ├── grading.json
         │       ├── grader_transcript.jsonl
+        │       ├── run_status.json     (status checkpoint for --resume)
         │       └── outputs/
         └── <baseline>/                 (without_skill or old_skill)
             └── run-<k>/ ...
 ```
 
-The `eval-<id>` / `run-<k>` naming is what `aggregate_benchmark.py` expects — don't rename these.
+The `eval-<id>` / `run-<k>` naming is convention — `aggregate_benchmark.py`, the viewer, and the dashboard upload all expect it. Don't rename these.
 
-### Step 1: Launch all runs (with-skill AND baseline) via the runner script
+### Step 1: Run one full iteration with `iterate`
 
-All executor runs (with_skill + baseline) and all grader runs are driven by a single script: `scripts/run_functional_eval.py`. It spawns `claude -p` subprocesses in parallel, writes `transcript.jsonl` / `timing.json` / `grading.json` per run into the workspace, and prints a summary JSON to stdout.
+`scripts/iterate.py` is the default entry point. It snapshots the skill (when needed), runs all executors + graders in parallel, writes a per-iteration manifest, aggregates into `benchmark.json`/`benchmark.md`, and launches the viewer in the background — all from one command.
 
-Before launching, ensure `evals/evals.json` lists the test cases (see `references/schemas.md` for the schema). If you're in the middle of drafting assertions, it's fine to launch with empty `expectations` and rerun just the grader phase once assertions are ready.
+Before launching, ensure `evals/evals.json` lists the test cases (see `references/schemas.md` for the schema). If you're in the middle of drafting assertions, it's fine to launch with empty `expectations` and rerun just the grader phase once assertions are ready (`--phase grader --resume`).
 
-**Invocation** — launch as a **background Bash tool call** (`run_in_background: true`) so you can draft assertions (Step 2) while it runs:
+**Invocation** — launch as a **background Bash tool call** (`run_in_background: true`) so you can draft assertions while it runs:
 
 ```bash
-python -m scripts.run_functional_eval \
-  --evals-json <path-to-evals.json> \
+python -m scripts.iterate \
   --skill-path <path-to-skill> \
   --workspace <skill-name>-workspace \
   --iteration <N> \
   --baseline-mode without_skill
 ```
 
-Run it **from the skill-creator directory** (so `python -m scripts.*` resolves). The layout the script builds is shown above.
+Run it **from the skill-creator directory** (so `python -m scripts.*` resolves).
 
 **Baseline modes:**
-- **Creating a new skill**: `--baseline-mode without_skill` (no skill in envelope). Baseline saves to `without_skill/`.
-- **Improving an existing skill**: `cp -r <skill-path> <workspace>/skill-snapshot/` before editing, then `--baseline-mode old_skill --snapshot-path <workspace>/skill-snapshot/`. Baseline saves to `old_skill/`.
+- **Creating a new skill**: `--baseline-mode without_skill` — no skill in baseline envelope; baseline saves to `without_skill/`.
+- **Improving an existing skill**: `--baseline-mode old_skill` — `iterate` automatically creates `<workspace>/skill-snapshot/` from `--skill-path` on first run if absent, then reuses it on subsequent runs. To refresh the baseline (e.g., between iterations) delete the snapshot dir; the next run will re-snapshot from the current skill. Baseline saves to `old_skill/`.
 
-**Other flags** (rarely needed):
+**Common flags:**
+- `--evals-json <path>` — defaults to `<skill-path>/evals/evals.json`
 - `--model <id>` — override the executor/grader model (defaults to your configured Claude Code model)
 - `--num-workers N` — parallelism (default 4)
 - `--default-timeout SEC` — per-run ceiling (default 600); per-eval override via a `timeout` field in `evals.json`
 - `--runs-per-config N` — replicate each eval/config N times for variance analysis (default 1; functional evals are expensive, bump deliberately)
-- `--phase executor` / `--phase grader` — run only one phase. Use when you want to launch executors, draft assertions while they run, then grade separately
+- `--resume` — skip runs already at-least `executed` (executor phase) or `graded` (grader phase); state is read from each run's `run_status.json`. Use after a crash, network blip, or to add new runs to a partial iteration.
+- `--phase executor` / `--phase grader` — run only one phase. Useful when interleaving manual work between phases.
+- `--no-view` / `--no-aggregate` — skip the trailing steps when you only want raw runs.
+- `--previous-iteration <N>` — pass `<workspace>/iteration-<N>/` to the viewer as `--previous-workspace` for diff display.
 
-**Crucial: do NOT read the run `transcript.jsonl` files into the main agent's context.** Stream-json emits every tool call and reasoning event — tens of thousands of tokens per run. The grader (also a subprocess) reads each transcript; the main agent should only look at the script's summary JSON and per-run `grading.json`.
+**Output:** `iterate` prints a structured JSON summary to stdout (status, manifest_path, benchmark_path, viewer_pid). The viewer runs in the background — `kill <viewer_pid>` to stop it when you're done.
 
-**Environment inheritance.** Each `claude -p` subprocess inherits the parent shell's environment, MCP servers, settings, and Claude Code auth — the only variable the script strips is `CLAUDECODE` (which would otherwise block nesting). Anything the main agent's shell has flows through automatically. Override per run via exported env vars before launching the script (e.g. `ANTHROPIC_API_KEY=... ANTHROPIC_BASE_URL=... python -m scripts.run_functional_eval ...`).
+**Crucial: do NOT read the run `transcript.jsonl` files into the main agent's context.** Stream-json emits every tool call and reasoning event — tens of thousands of tokens per run. The grader (also a subprocess) reads each transcript; the main agent should only look at the script's summary JSON, the manifest, and per-run `grading.json`.
 
-**What the script does under the hood** (so you can debug if something looks off):
-- For each eval × variant, creates `<run-dir>/` and writes `eval_metadata.json` derived from `evals.json`
-- Launches `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions` with stdin = envelope (skill-path hint + outputs hint + prompt), stdout → `transcript.jsonl`, stderr → `stderr.log`, wrapped with the configured timeout
-- Parses the final `result` event from the transcript to compute tokens/duration → `timing.json`
-- Then (unless `--phase executor`) spawns the grader with `--append-system-prompt "$(cat agents/grader.md)"` and a prompt pointing at `transcript.jsonl` + `outputs/`
-- Writes `grading.json` in each run dir and backfills grader timings
+**Environment inheritance.** Each `claude -p` subprocess inherits the parent shell's environment, MCP servers, settings, and Claude Code auth — the only variable the script strips is `CLAUDECODE` (which would otherwise block nesting). Override per run via exported env vars before launching `iterate` (e.g. `ANTHROPIC_API_KEY=... ANTHROPIC_BASE_URL=... python -m scripts.iterate ...`).
+
+**Dashboard upload (silent).** When `SKILL_DASHBOARD_URL` and `SKILL_DASHBOARD_TOKEN` are set in the env, the aggregation step also POSTs the iteration to the dashboard. This is fail-soft — a network error never blocks the workflow but will print `[dashboard] upload failed: …` on stderr. Set `SKILL_DASHBOARD_DISABLED=1` to opt out.
+
+**What `iterate` does under the hood** (so you can debug if something looks off):
+- Resolves `--snapshot-path` (defaults to `<workspace>/skill-snapshot/`); auto-creates it if missing and baseline=old_skill
+- Calls `run_functional_eval.run_all` which writes a skeleton `manifest.json` (all runs `pending`), then for each eval × variant: launches `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions` with stdin = envelope (skill-path hint + outputs hint + prompt), stdout → `transcript.jsonl`. Each worker writes `run_status.json` (`executed`/`failed`) when it completes
+- Parses each transcript's final `result` event for tokens/duration → `timing.json`
+- Spawns the grader with `--append-system-prompt "$(cat agents/grader.md)"` per run; updates `run_status.json` to `graded` on success
+- Refreshes `manifest.json` after all phases (idempotent rebuild from on-disk state)
+- Calls `aggregate_benchmark.generate_benchmark` to produce `benchmark.json`/`benchmark.md`, then optionally fires the dashboard upload
+- Spawns `eval-viewer/generate_review.py` as a detached background process
 
 ### Step 2: While runs are in progress, draft assertions
 
@@ -234,9 +250,22 @@ Good assertions are objectively verifiable and have descriptive names — they s
 
 Update `evals/evals.json` with the assertions once drafted (do NOT hand-edit the per-run `eval_metadata.json` files — they're regenerated from `evals.json` on every script invocation). Also explain to the user what they'll see in the viewer — both the qualitative outputs and the quantitative benchmark.
 
-### Step 3: Timing data — captured by the runner script automatically
+If you launched `iterate` with `--phase executor` to interleave assertion-drafting, kick off grading once assertions are ready:
 
-The script writes `timing.json` to each run directory as soon as its executor exits, and backfills grader timings when the grader phase finishes. Fields (see `references/schemas.md` for the full schema):
+```bash
+python -m scripts.iterate \
+  --skill-path <path-to-skill> \
+  --workspace <skill-name>-workspace \
+  --iteration <N> \
+  --baseline-mode <same-as-before> \
+  --phase grader --resume
+```
+
+The grader writes `grading.json` per run; it must use the fields `text`, `passed`, and `evidence` for each expectation — the viewer depends on these exact field names. For assertions that can be checked programmatically, the grader is instructed to write and run a script rather than eyeballing it — scripts are faster, more reliable, and can be reused across iterations.
+
+### Step 3: Timing data — captured automatically
+
+The runner writes `timing.json` to each run directory as soon as its executor exits, and backfills grader timings when the grader phase finishes. Fields (see `references/schemas.md` for the full schema):
 
 ```json
 {
@@ -252,49 +281,21 @@ The script writes `timing.json` to each run directory as soon as its executor ex
 }
 ```
 
-The top-level `total_tokens` / `duration_ms` / `total_duration_seconds` come from the subprocess's final `result` event; the `executor_*` / `grader_*` fields are wall-clock measurements bracketing each subprocess. Unlike the prior Task-notification flow, this data is **persisted in the transcript** and recoverable at any time — if you ever need to re-derive it manually, `jq -c 'select(.type=="result")' <run-dir>/transcript.jsonl | tail -1` gives you the result event.
+The top-level `total_tokens` / `duration_ms` / `total_duration_seconds` come from the subprocess's final `result` event; the `executor_*` / `grader_*` fields are wall-clock measurements bracketing each subprocess. The same data is also surfaced (per run) in `manifest.json`'s `runs[]` entries — handy if you want a quick scan of the iteration without walking every run dir.
 
-### Step 4: Grade, aggregate, and launch the viewer
+### Step 4: Analyst pass and viewer
 
-Once all runs are done:
+After `iterate` finishes:
 
-1. **Grade each run** — normally handled automatically by `run_functional_eval.py`. If you launched with `--phase executor` to interleave Step 2 work, now run the grader phase:
-   ```bash
-   python -m scripts.run_functional_eval \
-     --evals-json <path-to-evals.json> \
-     --skill-path <path-to-skill> \
-     --workspace <skill-name>-workspace \
-     --iteration <N> \
-     --baseline-mode <same-as-before> \
-     --phase grader
-   ```
-   The grader runs as a `claude -p` subprocess per run with `agents/grader.md` as its system prompt; it reads `transcript.jsonl` and `outputs/` and writes `grading.json` to the run directory. The grading.json expectations array must use the fields `text`, `passed`, and `evidence` (not `name`/`met`/`details` or other variants) — the viewer depends on these exact field names. For assertions that can be checked programmatically, the grader is instructed to write and run a script rather than eyeballing it — scripts are faster, more reliable, and can be reused across iterations.
+1. **Read the manifest** — `cat <workspace>/iteration-N/manifest.json` gives a quick per-run scan (status, pass_rate, tokens, duration). Use this instead of crawling individual run dirs.
 
-2. **Aggregate into benchmark** — run the aggregation script from the skill-creator directory:
-   ```bash
-   python -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>
-   ```
-   This produces `benchmark.json` and `benchmark.md` with pass_rate, time, and tokens for each configuration, with mean ± stddev and the delta. If generating benchmark.json manually, see `references/schemas.md` for the exact schema the viewer expects.
-Put each with_skill version before its baseline counterpart.
+2. **Do an analyst pass** — read `benchmark.json` and surface patterns the aggregate stats might hide. See `agents/analyzer.md` (the "Analyzing Benchmark Results" section) for what to look for — things like assertions that always pass regardless of skill (non-discriminating), high-variance evals (possibly flaky), and time/token tradeoffs.
 
-3. **Do an analyst pass** — read the benchmark data and surface patterns the aggregate stats might hide. See `agents/analyzer.md` (the "Analyzing Benchmark Results" section) for what to look for — things like assertions that always pass regardless of skill (non-discriminating), high-variance evals (possibly flaky), and time/token tradeoffs.
+3. **The viewer is already running** (unless you used `--no-view`). Tell the user something like: "I've opened the results in your browser at http://localhost:3117. There are two tabs — 'Outputs' lets you click through each test case and leave feedback, 'Benchmark' shows the quantitative comparison. When you're done, come back here and let me know." For iteration 2+, pass `--previous-iteration <N-1>` to `iterate` so the viewer shows a diff against the prior run.
 
-4. **Launch the viewer** with both qualitative outputs and quantitative data:
-   ```bash
-   nohup python <skill-creator-path>/eval-viewer/generate_review.py \
-     <workspace>/iteration-N \
-     --skill-name "my-skill" \
-     --benchmark <workspace>/iteration-N/benchmark.json \
-     > /dev/null 2>&1 &
-   VIEWER_PID=$!
-   ```
-   For iteration 2+, also pass `--previous-workspace <workspace>/iteration-<N-1>`.
+   **Cowork / headless environments:** Use `--no-view` and instead invoke the viewer manually with `--static <output_path>` to write a standalone HTML file. Feedback will be downloaded as a `feedback.json` file when the user clicks "Submit All Reviews". After download, copy `feedback.json` into the workspace directory for the next iteration to pick up.
 
-   **Cowork / headless environments:** If `webbrowser.open()` is not available or the environment has no display, use `--static <output_path>` to write a standalone HTML file instead of starting a server. Feedback will be downloaded as a `feedback.json` file when the user clicks "Submit All Reviews". After download, copy `feedback.json` into the workspace directory for the next iteration to pick up.
-
-Note: please use generate_review.py to create the viewer; there's no need to write custom HTML.
-
-5. **Tell the user** something like: "I've opened the results in your browser. There are two tabs — 'Outputs' lets you click through each test case and leave feedback, 'Benchmark' shows the quantitative comparison. When you're done, come back here and let me know."
+   Note: please use generate_review.py to create the viewer; there's no need to write custom HTML.
 
 ### What the user sees in the viewer
 
@@ -327,11 +328,23 @@ When the user tells you they're done, read `feedback.json`:
 
 Empty feedback means the user thought it was fine. Focus your improvements on the test cases where the user had specific complaints.
 
-Kill the viewer server when you're done with it:
+Kill the viewer server when you're done with it. The pid was printed in `iterate`'s stdout JSON as `viewer_pid`:
 
 ```bash
-kill $VIEWER_PID 2>/dev/null
+kill <viewer_pid> 2>/dev/null
 ```
+
+### Advanced: dropping below `iterate`
+
+`iterate` is a thin orchestrator over the same scripts you can call yourself when you need finer control. The underlying entry points stay supported:
+
+- **Just re-run the executor** for one iteration: `python -m scripts.run_functional_eval --evals-json … --skill-path … --workspace … --iteration N --baseline-mode … --phase executor`. Use `--resume` to skip already-executed runs (read from `run_status.json`).
+- **Just re-grade** without re-executing (e.g., after editing assertions): `python -m scripts.run_functional_eval … --phase grader --resume`. Already-graded runs are skipped.
+- **Re-aggregate** an existing iteration: `python -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>`. Reads `manifest.json` if present for skill metadata; falls back to glob otherwise.
+- **Manual dashboard upload** (e.g., to re-push after editing): `python -m scripts.upload_dashboard <workspace>/iteration-N --skill-name <name> --iteration N --skill-path <path>`. Requires `SKILL_DASHBOARD_URL` + `SKILL_DASHBOARD_TOKEN` env or `--dashboard-url`/`--token` flags.
+- **Standalone viewer**: `python eval-viewer/generate_review.py <workspace>/iteration-N --benchmark <…>/benchmark.json --skill-name <name>` — what `iterate` calls under the hood.
+
+The `manifest.json` schema and `run_status.json` lifecycle are documented in `references/manifest-schema.md`.
 
 ---
 
@@ -356,8 +369,8 @@ This task is pretty important (we are trying to create billions a year in econom
 After improving the skill:
 
 1. Apply your improvements to the skill
-2. Rerun all test cases into a new `iteration-<N+1>/` directory, including baseline runs. If you're creating a new skill, the baseline is always `without_skill` (no skill) — that stays the same across iterations. If you're improving an existing skill, use your judgment on what makes sense as the baseline: the original version the user came in with, or the previous iteration.
-3. Launch the reviewer with `--previous-workspace` pointing at the previous iteration
+2. Rerun all test cases into a new `iteration-<N+1>/` directory: `python -m scripts.iterate --skill-path … --workspace … --iteration <N+1> --baseline-mode … --previous-iteration <N>`. If you're creating a new skill, the baseline is always `without_skill` (no skill) — that stays the same across iterations. If you're improving an existing skill, use your judgment on what makes sense as the baseline: the original version the user came in with, or the previous iteration. To use the just-finished iteration as the new baseline, `rm -rf <workspace>/skill-snapshot/` before running so `iterate` re-snapshots from the current skill.
+3. The viewer launches automatically with the previous iteration as the diff target
 4. Wait for the user to review and tell you they're done
 5. Read the new feedback, improve again, repeat
 
@@ -512,6 +525,7 @@ The agents/ directory contains instructions for specialized roles. Each is desig
 
 The references/ directory has additional documentation:
 - `references/schemas.md` — JSON structures for evals.json, grading.json, etc.
+- `references/manifest-schema.md` — The per-iteration `manifest.json` + `run_status.json` format that `iterate` writes and downstream scripts read.
 
 ---
 

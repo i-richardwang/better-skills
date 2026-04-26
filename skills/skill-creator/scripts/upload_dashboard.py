@@ -29,7 +29,11 @@ from pathlib import Path
 from typing import Optional
 
 
-RUN_CONFIG_NAMES = {"with_skill", "without_skill", "new_skill", "old_skill"}
+# Fallback set for legacy iteration dirs without a manifest. New runs declare
+# their configs in iteration-N/manifest.json, so this is only used when manifest
+# is absent or has no `configs` field.
+DEFAULT_CONFIG_NAMES = {"with_skill", "without_skill", "new_skill", "old_skill"}
+MANIFEST_FILE = "manifest.json"
 
 
 def _get_git_sha(path: Path) -> Optional[str]:
@@ -65,11 +69,24 @@ def _read_json(path: Path) -> Optional[dict]:
         return None
 
 
+def _allowed_configs(benchmark_dir: Path) -> set[str]:
+    """Configs to upload, preferring manifest's declared list."""
+    manifest_path = benchmark_dir / MANIFEST_FILE
+    manifest = _read_json(manifest_path)
+    if isinstance(manifest, dict):
+        configs = manifest.get("configs")
+        if isinstance(configs, list) and configs:
+            return set(configs)
+    return DEFAULT_CONFIG_NAMES
+
+
 def collect_runs(benchmark_dir: Path) -> list[dict]:
     """Walk <benchmark_dir>/eval-*/[config]/run-*/grading.json and build the runs array."""
     search_root = benchmark_dir / "runs"
     if not search_root.exists():
         search_root = benchmark_dir
+
+    allowed = _allowed_configs(benchmark_dir)
 
     runs: list[dict] = []
     for eval_dir in sorted(search_root.glob("eval-*")):
@@ -84,7 +101,7 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
             eval_name = meta.get("eval_name") or meta.get("name") or ""
 
         for config_dir in sorted(p for p in eval_dir.iterdir() if p.is_dir()):
-            if config_dir.name not in RUN_CONFIG_NAMES:
+            if config_dir.name not in allowed:
                 continue
             configuration = _normalize_configuration(config_dir.name)
             if configuration is None:
