@@ -15,7 +15,8 @@ Use `python -m scripts.cli init <skill-path>` to scaffold starter templates.
 {
   "version": 2,
   "skill_name": "my-skill",                    // optional; defaults to skill dir name
-  "default_model": "claude-opus-4-7",          // optional; CLI --model overrides
+  "default_model": "claude-opus-4-7",          // executor model id; use "provider/model" form when executor=opencode
+  "executor": "claude",                        // "claude" or "opencode"; grader always runs on Claude
 
   "variants": [                                // each declared variant becomes
     {                                          // a directory under iteration-N/eval-X/

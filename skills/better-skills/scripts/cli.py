@@ -172,7 +172,6 @@ def cmd_run(args: argparse.Namespace) -> dict:
         num_workers=args.num_workers,
         default_timeout=args.default_timeout,
         runs_per_config=args.runs_per_config,
-        model=args.model,
         phase=args.phase,
         grader_md=Path(args.grader_md).resolve() if args.grader_md else None,
         resume=args.resume,
@@ -288,7 +287,6 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--num-workers", type=int, default=None)
         p.add_argument("--default-timeout", type=int, default=None)
         p.add_argument("--runs-per-config", type=int, default=None)
-        p.add_argument("--model", default=None)
         p.add_argument("--phase", choices=["all", "executor", "grader"], default="all")
         p.add_argument("--grader-md", default=None)
         p.add_argument("--resume", action="store_true")

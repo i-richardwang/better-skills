@@ -211,9 +211,8 @@ Run it **from the better-skills directory** (so `python -m scripts.*` resolves).
 - **Creating a new skill**: scaffold puts `with_skill` (mount=self) + `without_skill` (mount=none) — baseline runs Claude with no skill mounted.
 - **Improving an existing skill**: add a third variant `old_skill` with `mount: snapshot`. `iterate` automatically creates `<workspace>/skill-snapshot/` from `--skill-path` on first run if absent, then reuses it on subsequent runs. To refresh the baseline (e.g., between iterations) delete the snapshot dir; the next run re-snapshots from the current skill. Or just rename the variant — anything goes.
 
-**Common flags** (all override `evals.json` defaults):
+**Common CLI flags** (all override `evals.json` defaults):
 - `--evals-json <path>` — defaults to `<skill-path>/evals.json`
-- `--model <id>` — override the executor/grader model
 - `--num-workers N` — parallelism
 - `--default-timeout SEC` — per-run ceiling; per-case override via a `timeout_s` field in evals.json
 - `--runs-per-config N` — replicate each case × variant N times for variance analysis

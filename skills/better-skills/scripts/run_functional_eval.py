@@ -27,10 +27,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import EvalsConfig, VariantConfig, load_evals_config
+from .executor_opencode import (
+    parse_opencode_final_event,
+    run_opencode,
+)
 
 
 DEFAULT_TIMEOUT = 600
 DEFAULT_WORKERS = 4
+
+EXECUTOR_CLAUDE = "claude"
+EXECUTOR_OPENCODE = "opencode"
 
 MANIFEST_FILE = "manifest.json"
 RUN_STATUS_FILE = "run_status.json"
@@ -145,11 +152,16 @@ def _read_grading_summary(run_dir: Path) -> dict | None:
 
 
 def _executor_completed(run_dir: Path) -> bool:
-    """True when the executor produced a usable transcript with a final result event.
+    """True when the executor produced a usable transcript with a final event.
 
     Resume uses this rather than run_status.status so a grader failure never
     forces a full executor re-run — the executor's success is verifiable from
     its transcript, independent of the grader's later fate.
+
+    Recognises either the Claude `type=="result"` final event or the OpenCode
+    `step_finish` with `part.reason=="stop"`. The check is intentionally
+    executor-agnostic so resume works without us having to thread the executor
+    name into every disk-state probe.
     """
     transcript = run_dir / "transcript.jsonl"
     if not transcript.exists() or transcript.stat().st_size == 0:
@@ -161,10 +173,14 @@ def _executor_completed(run_dir: Path) -> bool:
                 if not line:
                     continue
                 try:
-                    if json.loads(line).get("type") == "result":
-                        return True
+                    ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if ev.get("type") == "result":
+                    return True
+                if ev.get("type") == "step_finish":
+                    if (ev.get("part") or {}).get("reason") == "stop":
+                        return True
     except OSError:
         return False
     return False
@@ -204,6 +220,7 @@ def _build_manifest_skeleton(
     model: str | None,
     runs: list[dict],
     iteration_dir: Path,
+    executor: str = EXECUTOR_CLAUDE,
 ) -> dict:
     """Construct the initial manifest with all planned runs marked pending.
 
@@ -226,6 +243,7 @@ def _build_manifest_skeleton(
         "baseline_variant": baseline_variant,
         "evals_json_path": str(evals_json),
         "model": model,
+        "executor": executor,
         "configs": configs,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
@@ -423,12 +441,17 @@ def run_executor(
     model: str | None,
     env_overrides: dict | None = None,
     applied_env_keys: list[str] | None = None,
+    executor: str = EXECUTOR_CLAUDE,
 ) -> dict:
     """Run one executor subprocess; write timing.json; return result dict.
 
     `applied_env_keys` is recorded in run_status.json so post-hoc debugging can
     answer "which env vars did the runner actually inject?" without leaking
     values (which may contain secrets).
+
+    `executor` selects the agent runtime. "claude" spawns `claude -p` (the
+    default); "opencode" spawns `opencode run` after planting per-run skill
+    isolation under run_dir.
     """
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "outputs").mkdir(exist_ok=True)
@@ -438,7 +461,8 @@ def run_executor(
     envelope = build_executor_envelope(skill_path, prompt, files)
 
     start_iso, start_wall = _now_iso(), time.time()
-    exit_code, timed_out = run_claude_p(
+    spawn = run_opencode if executor == EXECUTOR_OPENCODE else run_claude_p
+    exit_code, timed_out = spawn(
         prompt=envelope,
         cwd=run_dir,
         transcript_path=transcript,
@@ -449,13 +473,22 @@ def run_executor(
     )
     end_wall, end_iso = time.time(), _now_iso()
 
-    parsed = parse_result_event(transcript)
+    if executor == EXECUTOR_OPENCODE:
+        parsed = parse_opencode_final_event(transcript)
+    else:
+        parsed = parse_result_event(transcript)
     timing = {
         **parsed,
         "executor_start": start_iso,
         "executor_end": end_iso,
         "executor_duration_seconds": end_wall - start_wall,
     }
+    # OpenCode doesn't self-report duration; runner wall-clock is the truth.
+    # Backfill so downstream consumers (aggregate_benchmark, dashboard) read a
+    # non-zero "time_seconds" for opencode runs.
+    if executor == EXECUTOR_OPENCODE and not timing.get("duration_ms"):
+        timing["duration_ms"] = int((end_wall - start_wall) * 1000)
+        timing["total_duration_seconds"] = end_wall - start_wall
     (run_dir / "timing.json").write_text(json.dumps(timing, indent=2))
 
     extra_status: dict = {}
@@ -655,6 +688,7 @@ def _run_one(
     model: str | None,
     setup_script: Path | None,
     env_pool_q: queue.Queue | None,
+    executor: str = EXECUTOR_CLAUDE,
 ) -> dict:
     """One worker's full per-run lifecycle: acquire pool slot, merge with this
     case's static env, run the setup script (if configured), run the executor,
@@ -716,6 +750,7 @@ def _run_one(
             model=model,
             env_overrides=env_overrides,
             applied_env_keys=applied_env_keys,
+            executor=executor,
         )
     finally:
         if env_pool_q is not None and pool_slot is not None:
@@ -729,6 +764,7 @@ def run_phase_executor(
     resume: bool = False,
     env_pool: dict[str, list[str]] | None = None,
     setup_script: Path | None = None,
+    executor: str = EXECUTOR_CLAUDE,
 ) -> list[dict]:
     """Run executor for all `runs`. With resume=True, skip runs whose transcript
     already contains a final result event — that's an externally-verifiable signal
@@ -772,6 +808,7 @@ def run_phase_executor(
                 model,
                 setup_script,
                 env_pool_q,
+                executor,
             ): r for r in todo
         }
         done = 0
@@ -919,7 +956,6 @@ def run_all(
     num_workers: int | None = None,
     default_timeout: int | None = None,
     runs_per_config: int | None = None,
-    model: str | None = None,
     phase: str = "all",
     grader_md: Path | None = None,
     resume: bool = False,
@@ -942,7 +978,8 @@ def run_all(
     default_timeout = default_timeout if default_timeout is not None else config.defaults.timeout_s
     runs_per_config = runs_per_config if runs_per_config is not None else config.defaults.runs_per_variant
     skill_name = skill_name or config.skill_name or skill_path.name
-    model = model or config.default_model
+    model = config.default_model
+    executor = config.executor
 
     # Auto-snapshot whenever any variant uses mount=snapshot. Workspace default
     # is <workspace>/skill-snapshot/. Existing snapshots are never overwritten.
@@ -994,6 +1031,7 @@ def run_all(
         model=model,
         runs=runs,
         iteration_dir=iteration_dir,
+        executor=executor,
     )
     # Always fold existing on-disk state into the skeleton — even on a non-resume
     # re-run, the prior iteration's run dirs may have artifacts that the user can
@@ -1004,7 +1042,7 @@ def run_all(
 
     print(
         f"[plan] {len(config.cases)} cases × {len(config.variants)} variants = "
-        f"{len(runs)} executor runs, phase={phase}, resume={resume}",
+        f"{len(runs)} executor runs, phase={phase}, resume={resume}, executor={executor}",
         file=sys.stderr,
         flush=True,
     )
@@ -1018,6 +1056,7 @@ def run_all(
             resume=resume,
             env_pool=env_pool_values,
             setup_script=setup_script_path,
+            executor=executor,
         )
         # Refresh + rewrite manifest between phases so a viewer reading the file
         # sees real status before grading even starts.
@@ -1046,12 +1085,17 @@ def run_all(
         if not grader_md_path.exists():
             raise FileNotFoundError(f"grader.md not found at {grader_md_path}")
         grader_system_prompt = grader_md_path.read_text()
+        # The grader runs on Claude regardless of executor. default_model is
+        # for the executor, so it's only safe to share with the grader when
+        # executor is also Claude — under executor=opencode the model id is in
+        # provider/model form which `claude -p` rejects.
+        grader_model = model if executor == EXECUTOR_CLAUDE else None
         grader_results = run_phase_grader(
             executor_results=executor_results,
             grader_system_prompt=grader_system_prompt,
             num_workers=num_workers,
             timeout=default_timeout,
-            model=model,
+            model=grader_model,
             resume=resume,
         )
 

@@ -93,7 +93,6 @@ def run_iteration(args: argparse.Namespace) -> dict:
         num_workers=args.num_workers,
         default_timeout=args.default_timeout,
         runs_per_config=args.runs_per_config,
-        model=args.model,
         phase=args.phase,
         grader_md=Path(args.grader_md) if args.grader_md else None,
         resume=args.resume,
