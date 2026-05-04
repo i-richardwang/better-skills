@@ -11,7 +11,7 @@ At a high level, the process of creating a skill goes like this:
 
 - Decide what you want the skill to do and roughly how it should do it
 - Write a draft of the skill
-- Create a few test prompts and run claude-with-access-to-the-skill on them
+- Create a few test prompts and run `iterate` on them
 - Help the user evaluate the results both qualitatively and quantitatively
   - While the runs happen in the background, draft some quantitative evals if there aren't any (if there are some, you can either use as is or modify if you feel something needs to change about them). Then explain them to the user (or if they already existed, explain the ones that already exist)
   - Use the `eval-viewer/generate_review.py` script to show the user the results for them to look at, and also let them look at the quantitative metrics
@@ -211,6 +211,8 @@ Run it **from the better-skills directory** (so `python -m scripts.*` resolves).
 - **Creating a new skill**: scaffold puts `with_skill` (mount=self) + `without_skill` (mount=none) — baseline runs Claude with no skill mounted.
 - **Improving an existing skill**: add a third variant `old_skill` with `mount: snapshot`. `iterate` automatically creates `<workspace>/skill-snapshot/` from `--skill-path` on first run if absent, then reuses it on subsequent runs. To refresh the baseline (e.g., between iterations) delete the snapshot dir; the next run re-snapshots from the current skill. Or just rename the variant — anything goes.
 
+**Executor and grader runtimes** are configured in `evals.json` (`executor`, `grader_executor`, `default_model`, `grader_model`). Default is Claude for both; switch to `opencode` when the user only has OpenCode access. See `references/evals-schema.md` for the schema.
+
 **Common CLI flags** (all override `evals.json` defaults):
 - `--evals-json <path>` — defaults to `<skill-path>/evals.json`
 - `--num-workers N` — parallelism
@@ -223,23 +225,13 @@ Run it **from the better-skills directory** (so `python -m scripts.*` resolves).
 
 **Output:** `iterate` prints a structured JSON summary to stdout (status, manifest_path, benchmark_path, viewer_pid). The viewer runs in the background — `kill <viewer_pid>` to stop it when you're done.
 
-**Crucial: do NOT read the run `transcript.jsonl` files into the main agent's context.** Stream-json emits every tool call and reasoning event — tens of thousands of tokens per run. The grader (also a subprocess) reads each transcript; the main agent should only look at the script's summary JSON, the manifest, and per-run `grading.json`.
+**Crucial: do NOT read the run `transcript.jsonl` files into the main agent's context.** Each transcript is a stream of tool calls and reasoning events — tens of thousands of tokens per run. The grader (also a subprocess) reads each transcript; the main agent should only look at the script's summary JSON, the manifest, and per-run `grading.json`.
 
-**Environment inheritance.** Each `claude -p` subprocess inherits the parent shell's environment, MCP servers, settings, and Claude Code auth — the only variable the script strips is `CLAUDECODE` (which would otherwise block nesting). Override globally via exported env vars before launching (e.g. `ANTHROPIC_API_KEY=... ANTHROPIC_BASE_URL=... python -m scripts.cli iterate ...`).
+**Environment inheritance.** Env vars exported before launching the CLI (e.g. `ANTHROPIC_API_KEY=...`, `ANTHROPIC_BASE_URL=...`) propagate to all eval runs.
 
 For case-specific environment variables (e.g., one case tests `FEATURE=A`, another tests `FEATURE=B`), set `env: {KEY: VALUE}` on the case in `evals.json`. For parallel-test isolation when the skill touches external mutable state (database, browser profile, webhook receiver, port, ...), see the advanced "Per-run setup" section in `references/evals-schema.md` — it's symptom-led with copy-paste recipes.
 
 **Dashboard upload (silent).** When `SKILL_DASHBOARD_URL` and `SKILL_DASHBOARD_TOKEN` are set in the env, the aggregation step also POSTs the iteration to the dashboard. This is fail-soft — a network error never blocks the workflow but will print `[dashboard] upload failed: …` on stderr. Set `SKILL_DASHBOARD_DISABLED=1` to opt out.
-
-**What `iterate` does under the hood** (so you can debug if something looks off):
-- Loads `evals.json` (validated by pydantic — clear errors on bad config)
-- Resolves `--snapshot-path` (defaults to `<workspace>/skill-snapshot/`); auto-creates it if any variant uses `mount: snapshot`
-- Calls `run_functional_eval.run_all` which writes a skeleton `manifest.json` (all runs `pending`), then for each case × variant: launches `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions` with stdin = envelope (skill-path hint + outputs hint + prompt), stdout → `transcript.jsonl`. Each worker writes `run_status.json` (`executed`/`failed`) when it completes
-- Parses each transcript's final `result` event for tokens/duration → `timing.json`
-- Spawns the grader with `--append-system-prompt "$(cat agents/grader.md)"` per run; updates `run_status.json` to `graded` on success
-- Refreshes `manifest.json` after all phases (idempotent rebuild from on-disk state)
-- Calls `aggregate_benchmark.generate_benchmark` to produce `benchmark.json`/`benchmark.md` (uses `primary_variant`/`baseline_variant` from manifest to pin delta direction), then optionally fires the dashboard upload
-- Spawns `eval-viewer/generate_review.py` as a detached background process
 
 ### Step 2: While runs are in progress, draft assertions
 
@@ -386,7 +378,7 @@ Keep going until:
 
 For situations where you want a more rigorous comparison between two versions of a skill (e.g., the user asks "is the new version actually better?"), there's a blind comparison system. Read `agents/comparator.md` and `agents/analyzer.md` for the details. The basic idea is: give two outputs to an independent agent without telling it which is which, and let it judge quality. Then analyze why the winner won.
 
-This is optional, requires the `claude` CLI, and most users won't need it. The human review loop is usually sufficient.
+This is optional and most users won't need it — the human review loop is usually sufficient. The comparator/analyzer aren't wrapped by `better-skills` yet, so running them means spawning an executor CLI directly with the role specs from `agents/`.
 
 ---
 
@@ -477,9 +469,9 @@ After packaging, direct the user to the resulting `.skill` file path so they can
 
 ---
 
-## Environments without the `claude` CLI
+## Environments without subprocess capability
 
-In Claude.ai (and any environment where the `claude` CLI isn't available), the core workflow is the same (draft → test → review → improve → repeat), but spawn-via-subprocess isn't possible. Here's what to adapt:
+In Claude.ai (and any environment where you can't spawn an executor CLI), the core workflow is the same (draft → test → review → improve → repeat), but `iterate` and the optimization loops can't run. Here's what to adapt:
 
 **Running test cases**: No subprocesses means no parallel execution. For each test case, read the skill's SKILL.md, then follow its instructions to accomplish the test prompt yourself. Do them one at a time. This is less rigorous than independent subprocesses (you wrote the skill and you're also running it, so you have full context), but it's a useful sanity check — and the human review step compensates. Skip the baseline runs — just use the skill to complete the task as requested.
 
@@ -489,9 +481,7 @@ In Claude.ai (and any environment where the `claude` CLI isn't available), the c
 
 **The iteration loop**: Same as before — improve the skill, rerun the test cases, ask for feedback — just without the browser reviewer in the middle. You can still organize results into iteration directories on the filesystem if you have one.
 
-**Description optimization**: This section requires the `claude` CLI tool. Skip it if you're on Claude.ai.
-
-**Blind comparison**: Requires the `claude` CLI. Skip it.
+**Description optimization and blind comparison**: Both require subprocess execution. Skip them in this environment.
 
 **Packaging**: The `package_skill.py` script works anywhere with Python and a filesystem. On Claude.ai, you can run it and the user can download the resulting `.skill` file.
 
@@ -506,19 +496,19 @@ In Claude.ai (and any environment where the `claude` CLI isn't available), the c
 
 If you're in Cowork, the main things to know are:
 
-- You have the `claude` CLI, so the main workflow (launch test cases in parallel as background subprocesses, run baselines, grade, etc.) all works. (However, if you run into severe problems with timeouts, it's OK to run the test prompts in series rather than parallel.)
+- You have an executor CLI (`claude` or `opencode`), so the main workflow (launch test cases in parallel, run baselines, grade, etc.) all works. (However, if you run into severe problems with timeouts, it's OK to run the test prompts in series rather than parallel.)
 - You don't have a browser or display, so when generating the eval viewer, use `--static <output_path>` to write a standalone HTML file instead of starting a server. Then proffer a link that the user can click to open the HTML in their browser.
 - For whatever reason, the Cowork setup seems to disincline Claude from generating the eval viewer after running the tests, so just to reiterate: whether you're in Cowork or in Claude Code, after running tests, you should always generate the eval viewer for the human to look at examples before revising the skill yourself and trying to make corrections, using `generate_review.py` (not writing your own boutique html code). Sorry in advance but I'm gonna go all caps here: GENERATE THE EVAL VIEWER *BEFORE* evaluating inputs yourself. You want to get them in front of the human ASAP!
 - Feedback works differently: since there's no running server, the viewer's "Submit All Reviews" button will download `feedback.json` as a file. You can then read it from there (you may have to request access first).
 - Packaging works — `package_skill.py` just needs Python and a filesystem.
-- Description optimization (`run_loop.py` / `run_eval.py`) should work in Cowork just fine since it uses `claude -p` via subprocess, not a browser, but please save it until you've fully finished making the skill and the user agrees it's in good shape.
+- Description optimization (`run_loop.py` / `run_eval.py`) should work in Cowork just fine since it runs subprocesses, not a browser, but please save it until you've fully finished making the skill and the user agrees it's in good shape.
 - **Updating an existing skill**: The user might be asking you to update an existing skill, not create a new one. Follow the update guidance in the claude.ai section above.
 
 ---
 
 ## Reference files
 
-The agents/ directory contains instructions for specialized roles. Each is designed to be loaded as the system prompt of a dedicated `claude -p` subprocess (`--append-system-prompt "$(cat <file>)"`).
+The agents/ directory contains role specs the runner uses for the grader, comparator, and analyzer subprocesses.
 
 - `agents/grader.md` — How to evaluate assertions against outputs
 - `agents/comparator.md` — How to do blind A/B comparison between two outputs
@@ -535,7 +525,7 @@ Repeating one more time the core loop here for emphasis:
 
 - Figure out what the skill is about
 - Draft or edit the skill
-- Run claude-with-access-to-the-skill on test prompts
+- Run `iterate` on the test prompts
 - With the user, evaluate the outputs:
   - Create benchmark.json and run `eval-viewer/generate_review.py` to help the user review them
   - Run quantitative evals

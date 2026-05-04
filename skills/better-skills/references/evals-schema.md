@@ -71,24 +71,13 @@ Use `python -m scripts.cli init <skill-path>` to scaffold starter templates.
 
 ### Executor and grader runtimes
 
-`executor` and `grader_executor` are independent. Each accepts `"claude"` or
-`"opencode"`. Default is `"claude"` for both.
+The grader is the measurement instrument: pin `grader_executor` and
+`grader_model` once per skill and don't change them mid-campaign, otherwise
+results stop being comparable across iterations.
 
-The grader is the measurement instrument — pin it once per skill so results
-stay comparable across iterations of the same `evals.json`. Don't change
-`grader_executor` or `grader_model` partway through a measurement campaign.
-
-| `grader_executor` | How the rubric is injected |
-|---|---|
-| `claude` | `claude -p --append-system-prompt <agents/grader.md>` — rubric augments Claude Code's default system prompt, tool guidance is preserved |
-| `opencode` | Rubric is prepended to the user prompt (`opencode run` has no system-prompt flag); OpenCode's default agent provides tool guidance |
-
-`grader_model` resolution when the field is `null`:
-- if `grader_executor == executor`, the runner reuses `default_model`
-- otherwise the chosen CLI's own default model is used
-
-Each run's `run_status.json` records the actual `grader_executor` and
-`grader_model` it ran with.
+When `grader_model` is null, the runner reuses `default_model` if
+`grader_executor == executor`, otherwise lets the chosen CLI pick its own
+default.
 
 ### Mount types
 
