@@ -1,5 +1,5 @@
 {
-  "id": "f0e90014-3f2b-4f88-af14-d47dc755e4af",
+  "id": "5f12166a-0359-4275-8998-2a014429ec7c",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -26,32 +26,20 @@
           "primaryKey": false,
           "notNull": true
         },
-        "primary_variant": {
-          "name": "primary_variant",
+        "baseline_resolved": {
+          "name": "baseline_resolved",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "baseline_variant": {
-          "name": "baseline_variant",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "variants": {
-          "name": "variants",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "primary_pass_rate_mean": {
-          "name": "primary_pass_rate_mean",
+        "current_pass_rate_mean": {
+          "name": "current_pass_rate_mean",
           "type": "numeric(5, 4)",
           "primaryKey": false,
           "notNull": false
         },
-        "primary_pass_rate_stddev": {
-          "name": "primary_pass_rate_stddev",
+        "current_pass_rate_stddev": {
+          "name": "current_pass_rate_stddev",
           "type": "numeric(5, 4)",
           "primaryKey": false,
           "notNull": false
@@ -68,14 +56,14 @@
           "primaryKey": false,
           "notNull": false
         },
-        "primary_tokens_mean": {
-          "name": "primary_tokens_mean",
+        "current_tokens_mean": {
+          "name": "current_tokens_mean",
           "type": "real",
           "primaryKey": false,
           "notNull": false
         },
-        "primary_time_seconds_mean": {
-          "name": "primary_time_seconds_mean",
+        "current_time_seconds_mean": {
+          "name": "current_time_seconds_mean",
           "type": "real",
           "primaryKey": false,
           "notNull": false
@@ -136,6 +124,12 @@
         },
         "evals_definition": {
           "name": "evals_definition",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "skill_files": {
+          "name": "skill_files",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false

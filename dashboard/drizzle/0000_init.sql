@@ -2,15 +2,13 @@ CREATE TABLE "iterations" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"skill_id" integer NOT NULL,
 	"iteration_number" integer NOT NULL,
-	"primary_variant" text,
-	"baseline_variant" text,
-	"variants" text[],
-	"primary_pass_rate_mean" numeric(5, 4),
-	"primary_pass_rate_stddev" numeric(5, 4),
+	"baseline_resolved" text,
+	"current_pass_rate_mean" numeric(5, 4),
+	"current_pass_rate_stddev" numeric(5, 4),
 	"baseline_pass_rate_mean" numeric(5, 4),
 	"baseline_pass_rate_stddev" numeric(5, 4),
-	"primary_tokens_mean" real,
-	"primary_time_seconds_mean" real,
+	"current_tokens_mean" real,
+	"current_time_seconds_mean" real,
 	"baseline_tokens_mean" real,
 	"baseline_time_seconds_mean" real,
 	"runs_per_configuration" integer,
@@ -21,6 +19,7 @@ CREATE TABLE "iterations" (
 	"hostname" text,
 	"raw_benchmark" jsonb NOT NULL,
 	"evals_definition" jsonb,
+	"skill_files" jsonb,
 	"uploaded_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint

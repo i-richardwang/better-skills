@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1777190462034,
+      "when": 1777983438867,
       "tag": "0000_init",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1777208430121,
-      "tag": "0001_add_skill_files",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1777339200000,
-      "tag": "0002_rename_variants_to_current_baseline",
       "breakpoints": true
     }
   ]

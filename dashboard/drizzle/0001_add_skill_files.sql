@@ -1,1 +1,0 @@
-ALTER TABLE "iterations" ADD COLUMN "skill_files" jsonb;
