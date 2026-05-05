@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/db/client";
 import { checkUploadAuth } from "@/lib/upload-auth";
 
@@ -282,7 +282,11 @@ export async function POST(request: Request) {
         await tx.insert(schema.runs).values(runRows);
       }
 
-      // 5. update skill denormalized summary
+      // 5. update skill denormalized summary — only when this iteration is
+      // at least as new as the stored latest. Out-of-order uploads (e.g.
+      // backfilling iter 2 after iter 3 has already shipped) must not
+      // regress the displayed pointer. The IS NULL branch covers the row
+      // we just inserted in step 1.
       await tx
         .update(schema.skills)
         .set({
@@ -290,7 +294,15 @@ export async function POST(request: Request) {
           latestPassRate: iterSummary.currentPassRateMean,
           updatedAt: sql`now()`,
         })
-        .where(eq(schema.skills.id, skillId));
+        .where(
+          and(
+            eq(schema.skills.id, skillId),
+            or(
+              isNull(schema.skills.latestIterationNumber),
+              lte(schema.skills.latestIterationNumber, iteration_number),
+            ),
+          ),
+        );
 
       return { skillId, iterationId };
     });
