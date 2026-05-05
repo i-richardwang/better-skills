@@ -6,8 +6,8 @@ between scripts in the pipeline — `aggregate_benchmark.py`,
 `upload_dashboard.py`, and any other downstream tool **require** it.
 
 The on-disk run dirs remain the ultimate source of truth for per-run results;
-the manifest is the index that tells consumers which variants exist, which is
-primary/baseline, and where to find each run.
+the manifest is the index that tells consumers what was tested, what
+configurations exist, and where to find each run.
 
 ## File layout
 
@@ -18,9 +18,13 @@ primary/baseline, and where to find each run.
     ├── benchmark.json                    # produced by aggregate_benchmark
     ├── benchmark.md
     ├── viewer.log                        # if launched via iterate
+    ├── skill-state/                      # snapshot of the live skill at
+    │                                     # iterate-end. Future iterations
+    │                                     # resolve --baseline=previous
+    │                                     # against this dir.
     └── eval-<id>/
         ├── eval_metadata.json
-        └── <config>/                     # e.g. with_skill, without_skill, old_skill
+        └── current/ or baseline/         # always these two directory names
             └── run-<k>/
                 ├── transcript.jsonl
                 ├── stderr.log
@@ -35,26 +39,27 @@ primary/baseline, and where to find each run.
 
 ```jsonc
 {
-  "version": 1,
+  "version": 2,
   "iteration": 3,
   "skill_name": "my-skill",
   "skill_path": "/abs/path/to/skill",
-  "snapshot_path": "/abs/path/to/skill-snapshot",   // null if no variant uses mount=snapshot
-  "primary_variant": "with_skill",                   // from evals.json defaults
-  "baseline_variant": "without_skill",               // from evals.json defaults; nullable
+  "baseline_spec": "previous",                       // raw spec from default_baseline / --baseline
+  "baseline_resolved": "iteration-2",                // what it actually resolved to (auto-degrades 'previous'→'none' on iteration 1, etc.)
+  "baseline_path": "/abs/path/to/iteration-2/skill-state",  // null when baseline_resolved="none"
   "evals_json_path": "/abs/path/to/evals.json",
   "model": "claude-opus-4-7",                        // null if not set
-  "configs": ["with_skill", "without_skill"],        // variant names, order = evals.json variants[]
+  "executor": "claude",                              // claude or opencode
+  "configs": ["current", "baseline"],                // always exactly these two, in this order
   "created_at": "2026-04-26T12:00:00+00:00",
   "updated_at": "2026-04-26T12:42:13+00:00",
   "runs": [
     {
-      "id": "eval-1-with_skill-run-1",
+      "id": "eval-1-current-run-1",
       "eval_id": 1,
       "eval_name": "first eval",
-      "config": "with_skill",                        // matches one of `configs[]`
+      "config": "current",                           // "current" or "baseline"
       "replicate": 1,
-      "path": "eval-1/with_skill/run-1",            // relative to iteration dir
+      "path": "eval-1/current/run-1",                // relative to iteration dir
       "status": "graded",                            // see status states below
       "executor_duration_s": 12.345,
       "grader_duration_s": 4.123,
@@ -75,13 +80,15 @@ primary/baseline, and where to find each run.
 
 ### Field notes
 
-- **`configs`** is the authoritative list of variant directory names for this
-  iteration. It comes from the order of `variants[]` in evals.json and gates
-  what `aggregate_benchmark` and `upload_dashboard` consider — stray dirs
-  (failed-runs/, scratch/) are ignored.
-- **`primary_variant` / `baseline_variant`** come from `evals.json`'s
-  `defaults` block. They pin the delta direction (`delta = primary - baseline`)
-  so reordering variants in evals.json doesn't accidentally invert the sign.
+- **`configs`** is always `["current", "baseline"]`. Hardcoded — every
+  iteration runs each case under those two configurations.
+- **`baseline_spec`** records what the user (or evals.json default) asked
+  for; **`baseline_resolved`** records what it actually became after
+  auto-degradation. Both are kept so post-hoc inspection can tell e.g.
+  "the user said `previous`, but on iteration 1 that fell through to `none`".
+- **`baseline_path`** is the absolute path the runner mounted for the
+  `baseline` config. `null` when `baseline_resolved` is `"none"` (no skill
+  mounted for the baseline config).
 - **`runs[].path`** is always relative to the iteration dir, so manifests are
   movable across machines as long as the on-disk layout travels with them.
 - **`runs[]` per-run metrics** (`executor_duration_s`, `tokens`, `pass_rate`,
@@ -125,11 +132,12 @@ display, not for resume gating.
 
 ## Lifecycle
 
-1. **Plan** — `run_all` calls `plan_runs`, then `_build_manifest_skeleton`
-   marks every planned run as `pending`. Before writing, the skeleton is
-   refreshed against any existing on-disk state so a viewer reading mid-run
-   never sees a freshly-blanked manifest. The manifest is written before any
-   work starts so a crash mid-run still leaves a discoverable contract.
+1. **Plan** — `run_all` calls `plan_runs` (which always emits 2N runs:
+   `cases × {current, baseline}`), then `_build_manifest_skeleton` marks
+   every planned run as `pending`. Before writing, the skeleton is refreshed
+   against any existing on-disk state so a viewer reading mid-run never sees
+   a freshly-blanked manifest. The manifest is written before any work
+   starts so a crash mid-run still leaves a discoverable contract.
 2. **Execute** — Each worker writes `run_status.json` to its own run dir
    when it finishes (`executed` or `failed`). No worker touches the
    manifest directly — there is no shared lock. After the executor pool
@@ -138,8 +146,9 @@ display, not for resume gating.
 3. **Grade** — Only runs with a usable `transcript.jsonl` are queued; the
    rest are short-circuited as `failed` with `skipped_reason: no_transcript`.
    Each grader updates the run's status to `graded` or `failed`.
-4. **Refresh** — At the end of `run_all`, `_refresh_manifest_runs` walks
-   every run dir, reads `run_status.json` + `timing.json` + `grading.json`,
-   and rebuilds the manifest's per-run entries. Idempotent — safe to call
-   multiple times.
-
+4. **Refresh + snapshot** — At the end of `run_all`, `_refresh_manifest_runs`
+   walks every run dir, reads `run_status.json` + `timing.json` +
+   `grading.json`, and rebuilds the manifest's per-run entries. Then (only
+   when `phase=all`) `dump_skill_state` copies the live skill into
+   `iteration-N/skill-state/` so iteration N+1's `--baseline=previous`
+   will resolve to it.

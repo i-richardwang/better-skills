@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""Run functional evals for a skill via `claude -p` subprocess.
+"""Run functional evals for a skill via `claude -p` / `opencode run` subprocesses.
 
-Reads variants and cases from evals.json (see scripts/config.py for the schema).
-For each (case × variant), spawns a `claude -p` executor in parallel. After
-all executors complete, spawns a grader subprocess per run that evaluates
-expectations against the transcript + outputs.
-
-Variants are data: each variant declares a `mount` (self/none/snapshot/path)
-that decides what skill, if any, is attached for that comparison branch. There
-are no hardcoded "with_skill"/"without_skill" strings in this script.
-
-Same spawn semantics as before — stream-json + verbose, bypassPermissions,
-env inherits everything except CLAUDECODE so `claude -p` can nest inside a
-Claude Code session.
+Reads cases from evals.json (see scripts/config.py for the schema). For each case,
+runs two configurations — `current` (the live skill) and `baseline` (resolved from
+`default_baseline` or `--baseline`). After all runs complete, the runner snapshots
+the live skill into `iteration-N/skill-state/` so future iterations can compare
+against it via `--baseline=previous` or `--baseline=iteration-N`.
 """
 
 import hashlib
@@ -27,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import EvalsConfig, VariantConfig, load_evals_config
+from .config import EvalsConfig, load_evals_config, validate_baseline_spec
 from .executor_opencode import (
     parse_opencode_final_event,
     run_opencode,
@@ -40,9 +33,16 @@ DEFAULT_WORKERS = 4
 EXECUTOR_CLAUDE = "claude"
 EXECUTOR_OPENCODE = "opencode"
 
+# Fixed config names — used as directory names + dashboard column keys. The
+# pre-rewrite codebase let users pick variant names via evals.json; this rewrite
+# pins them to two stable values so downstream consumers (manifest, benchmark,
+# dashboard) don't need to discover variant names dynamically.
+CONFIG_CURRENT = "current"
+CONFIG_BASELINE = "baseline"
+
 MANIFEST_FILE = "manifest.json"
 RUN_STATUS_FILE = "run_status.json"
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 # Status progression for a single run. Each step subsumes the prior one — a
 # "graded" run has also been "executed". `--resume` uses these as ordered
@@ -54,24 +54,14 @@ STATUS_FAILED = "failed"
 
 # Place each run's cwd outside any project tree so Claude Code's project-local
 # discovery (cwd-upward `.claude/skills/`, project `CLAUDE.md`, `.claude/commands/`)
-# cannot leak into the executor's system prompt and break the with/without
+# cannot leak into the executor's system prompt and break the current/baseline
 # comparison. The executor receives absolute paths for input files and outputs,
 # so the empty cwd is invisible to the agent.
-#
-# Scope: this closes the *project-level* asymmetric leak. Symmetric global leakage
-# from `~/.claude/skills/` (skills the user has installed for personal use) is NOT
-# closed — closing it would require wiping HOME, which loses Claude Code's auth.
-# Don't install the skill being tested globally during evals.
 ISO_CWD_ROOT = Path("/tmp/better-skills-iso")
 
 
 def _isolated_cwd(run_dir: Path) -> Path:
-    """Materialise an isolated cwd outside any project tree.
-
-    The slug embeds the run_dir's last 4 path components for human-readable
-    debugging; a sha1 prefix prevents collisions when two workspaces share
-    the same iteration/eval/variant/run layout.
-    """
+    """Materialise an isolated cwd outside any project tree."""
     slug = "-".join(run_dir.parts[-4:])
     h = hashlib.sha1(str(run_dir.resolve()).encode()).hexdigest()[:8]
     iso = ISO_CWD_ROOT / f"{slug}-{h}"
@@ -80,14 +70,7 @@ def _isolated_cwd(run_dir: Path) -> Path:
 
 
 def _resolve_case_file(file_ref: str, skill_path: Path) -> str:
-    """Resolve case.files entries to absolute paths.
-
-    With cwd moved to `/tmp/better-skills-iso/...`, relative paths in the
-    envelope's "Input files: ..." line would no longer resolve where the user
-    intended (they assumed cwd was inside the skill or workspace). Resolve
-    against skill_path — the natural anchor since evals.json lives there.
-    Already-absolute paths pass through.
-    """
+    """Resolve case.files entries to absolute paths against the skill dir."""
     p = Path(file_ref)
     if p.is_absolute():
         return str(p)
@@ -95,9 +78,6 @@ def _resolve_case_file(file_ref: str, skill_path: Path) -> str:
 
 
 def _env(overrides: dict | None = None) -> dict:
-    # Drop CLAUDECODE so `claude -p` can nest inside a Claude Code session.
-    # Same pattern as run_eval.py. `overrides` win over inherited values — used
-    # to inject per-worker pool slot values + per-case static env.
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
     if overrides:
         env.update(overrides)
@@ -105,13 +85,7 @@ def _env(overrides: dict | None = None) -> dict:
 
 
 def _build_env_pool_queue(env_pool: dict[str, list[str]]) -> queue.Queue | None:
-    """Turn the declared per_run_setup.env pool into a queue of per-worker env dicts.
-
-    Same index across keys binds to the same worker — config validation already
-    enforces equal-length lists. Worker threads `get()` a dict on entry and
-    `put()` it back when done, so the same DB / sandbox / port stays pinned to
-    one in-flight run at a time.
-    """
+    """Turn the declared per_run_setup.env pool into a queue of per-worker env dicts."""
     if not env_pool:
         return None
     pool_size = len(next(iter(env_pool.values())))
@@ -129,24 +103,79 @@ def _run_id(eval_id: int, config: str, replicate: int) -> str:
     return f"eval-{eval_id}-{config}-run-{replicate}"
 
 
-def _ensure_snapshot(skill_path: Path, snapshot_path: Path) -> None:
-    """For old_skill baseline: copy current skill into snapshot dir if absent.
+def resolve_baseline(
+    spec: str,
+    workspace: Path,
+    iteration: int,
+) -> tuple[Path | None, str]:
+    """Resolve a baseline spec into (skill_path or None, resolved_label).
 
-    The snapshot is meant to capture "the version we're comparing against" — usually
-    the previous iteration's skill. We never overwrite an existing snapshot because
-    the user may have already iterated past it; refreshing the baseline is an
-    explicit `rm -rf <snapshot>` operation, not a side effect of running evals.
+    The label captures what was actually picked, including auto-degradation —
+    e.g. `previous` becomes `none` when iteration-(N-1)/skill-state/ doesn't
+    exist. The label is what gets recorded in the manifest so post-hoc
+    inspection can tell what the run actually compared against.
+
+    Returns:
+      (None, "none")              for `none` or auto-degraded `previous`
+      (Path, "iteration-K")       for `previous` (resolves to K=N-1) or `iteration-K`
+      (Path, "path:/abs/path")    for `path:/abs/path`
     """
-    if snapshot_path.exists():
-        return
-    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(skill_path, snapshot_path)
-    print(
-        f"[snapshot] created baseline snapshot at {snapshot_path} (from {skill_path}). "
-        f"Delete this dir to reset the baseline.",
-        file=sys.stderr,
-        flush=True,
-    )
+    validate_baseline_spec(spec)
+
+    if spec == "none":
+        return None, "none"
+
+    if spec == "previous":
+        if iteration <= 1:
+            print(
+                f"[baseline] iteration {iteration} has no previous; degrading to 'none'",
+                file=sys.stderr, flush=True,
+            )
+            return None, "none"
+        prev_state = workspace / f"iteration-{iteration - 1}" / "skill-state"
+        if not prev_state.exists():
+            print(
+                f"[baseline] {prev_state} not found; degrading to 'none'",
+                file=sys.stderr, flush=True,
+            )
+            return None, "none"
+        return prev_state.resolve(), f"iteration-{iteration - 1}"
+
+    if spec.startswith("iteration-"):
+        n = int(spec.split("-", 1)[1])
+        target = workspace / f"iteration-{n}" / "skill-state"
+        if not target.exists():
+            raise FileNotFoundError(
+                f"baseline '{spec}': {target} not found. Either run iteration {n} first "
+                f"or pick a different baseline."
+            )
+        return target.resolve(), f"iteration-{n}"
+
+    if spec.startswith("path:"):
+        path = Path(spec[len("path:"):]).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"baseline '{spec}': {path} not found")
+        return path, f"path:{path}"
+
+    raise ValueError(f"unhandled baseline spec: {spec}")
+
+
+def dump_skill_state(skill_path: Path, iteration_dir: Path) -> Path:
+    """Copy the live skill into iteration-N/skill-state/.
+
+    Called at iterate-end so iteration N's snapshot reflects the version that
+    was just tested under `current`. iteration N+1 with --baseline=previous
+    will then resolve to this directory.
+
+    If the destination already exists (e.g. user re-ran the same iteration),
+    we wipe and re-copy — the live skill is the source of truth for "what was
+    tested in this iteration"; staleness here would mislead future baselines.
+    """
+    state_dir = iteration_dir / "skill-state"
+    if state_dir.exists():
+        shutil.rmtree(state_dir)
+    shutil.copytree(skill_path, state_dir)
+    return state_dir
 
 
 def _write_run_status(run_dir: Path, status: str, **fields) -> None:
@@ -175,14 +204,6 @@ def _read_run_status(run_dir: Path) -> dict | None:
         return None
 
 
-def _is_at_least(current: str | None, target: str) -> bool:
-    """Status ordering: pending < executed < graded. failed never satisfies."""
-    order = {STATUS_PENDING: 0, STATUS_EXECUTED: 1, STATUS_GRADED: 2}
-    if current is None or current == STATUS_FAILED:
-        return False
-    return order.get(current, -1) >= order.get(target, 99)
-
-
 def _read_grading_summary(run_dir: Path) -> dict | None:
     path = run_dir / "grading.json"
     if not path.exists():
@@ -194,17 +215,7 @@ def _read_grading_summary(run_dir: Path) -> dict | None:
 
 
 def _executor_completed(run_dir: Path) -> bool:
-    """True when the executor produced a usable transcript with a final event.
-
-    Resume uses this rather than run_status.status so a grader failure never
-    forces a full executor re-run — the executor's success is verifiable from
-    its transcript, independent of the grader's later fate.
-
-    Recognises either the Claude `type=="result"` final event or the OpenCode
-    `step_finish` with `part.reason=="stop"`. The check is intentionally
-    executor-agnostic so resume works without us having to thread the executor
-    name into every disk-state probe.
-    """
+    """True when the executor produced a usable transcript with a final event."""
     transcript = run_dir / "transcript.jsonl"
     if not transcript.exists() or transcript.stat().st_size == 0:
         return False
@@ -229,7 +240,6 @@ def _executor_completed(run_dir: Path) -> bool:
 
 
 def _grader_completed(run_dir: Path) -> bool:
-    """True when grading.json exists and parses — grader's success is its output."""
     path = run_dir / "grading.json"
     if not path.exists():
         return False
@@ -255,46 +265,36 @@ def _build_manifest_skeleton(
     iteration: int,
     skill_name: str,
     skill_path: Path,
-    snapshot_path: Path | None,
-    primary_variant: str,
-    baseline_variant: str | None,
+    baseline_spec: str,
+    baseline_resolved: str,
+    baseline_path: Path | None,
     evals_json: Path,
     model: str | None,
     runs: list[dict],
     iteration_dir: Path,
     executor: str = EXECUTOR_CLAUDE,
 ) -> dict:
-    """Construct the initial manifest with all planned runs marked pending.
-
-    `primary_variant` and `baseline_variant` come from the evals.json defaults
-    block; downstream consumers (aggregate_benchmark, dashboard) read them
-    instead of guessing from a hardcoded preference list.
-    """
-    # Preserve the order in which variants first appear so iteration is stable.
-    configs: list[str] = []
-    for r in runs:
-        if r["variant"] not in configs:
-            configs.append(r["variant"])
+    """Construct the initial manifest with all planned runs marked pending."""
     return {
         "version": MANIFEST_VERSION,
         "iteration": iteration,
         "skill_name": skill_name,
         "skill_path": str(skill_path),
-        "snapshot_path": str(snapshot_path) if snapshot_path else None,
-        "primary_variant": primary_variant,
-        "baseline_variant": baseline_variant,
+        "baseline_spec": baseline_spec,
+        "baseline_resolved": baseline_resolved,
+        "baseline_path": str(baseline_path) if baseline_path else None,
         "evals_json_path": str(evals_json),
         "model": model,
         "executor": executor,
-        "configs": configs,
+        "configs": [CONFIG_CURRENT, CONFIG_BASELINE],
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
         "runs": [
             {
-                "id": _run_id(r["eval_id"], r["variant"], r["run_number"]),
+                "id": _run_id(r["eval_id"], r["config"], r["run_number"]),
                 "eval_id": r["eval_id"],
                 "eval_name": r["eval_name"],
-                "config": r["variant"],
+                "config": r["config"],
                 "replicate": r["run_number"],
                 "path": str(r["run_dir"].relative_to(iteration_dir)),
                 "status": STATUS_PENDING,
@@ -305,19 +305,12 @@ def _build_manifest_skeleton(
 
 
 def _refresh_manifest_runs(iteration_dir: Path, manifest: dict) -> dict:
-    """Walk per-run status files + grading.json and update the manifest in place.
-
-    Source of truth is on disk — this rebuild is idempotent and tolerates partial
-    or crashed runs. Any field already on the run entry is preserved unless we
-    have a fresher value from disk.
-    """
+    """Walk per-run status files + grading.json and update the manifest in place."""
     for entry in manifest.get("runs", []):
         run_dir = iteration_dir / entry["path"]
         status_data = _read_run_status(run_dir) or {}
         if status_data.get("status"):
             entry["status"] = status_data["status"]
-        # Surface failure detail fields so the manifest alone tells you why a run
-        # is marked failed — no need to crawl into the run dir.
         for fail_field in (
             "executor_exit_code", "executor_timed_out",
             "grader_exit_code", "grader_timed_out",
@@ -396,14 +389,7 @@ def _run_setup_script(
     env_overrides: dict | None,
     timeout: int,
 ) -> tuple[int, bool]:
-    """Execute `per_run_setup.script` before the executor subprocess.
-
-    The script inherits the run's env (per_run_setup.env pool slot + the
-    case's static env), so it can target the same isolated state the executor
-    will see. stdout/stderr go to setup_*.log inside the run dir for
-    debuggability; non-zero exit is the runner's signal that the run should
-    not proceed.
-    """
+    """Execute `per_run_setup.script` before the executor subprocess."""
     run_dir.mkdir(parents=True, exist_ok=True)
     setup_stdout = run_dir / "setup_stdout.log"
     setup_stderr = run_dir / "setup_stderr.log"
@@ -462,13 +448,7 @@ def build_executor_envelope(
     files: list[str],
     outputs_dir: Path,
 ) -> str:
-    """Construct the executor prompt: skill hint + outputs hint + input files + user prompt.
-
-    `outputs_dir` is the absolute path where outputs must be saved. We pass
-    an absolute path because the executor's cwd is in `/tmp/better-skills-iso/`
-    (see `_isolated_cwd`), so a relative `./outputs/` would land in the iso
-    dir instead of the run_dir the grader expects.
-    """
+    """Construct the executor prompt: skill hint + outputs hint + input files + user prompt."""
     lines = []
     if skill_path:
         lines.append(f"Use the skill at {skill_path}. Save any outputs to {outputs_dir}/.")
@@ -492,20 +472,7 @@ def run_executor(
     applied_env_keys: list[str] | None = None,
     executor: str = EXECUTOR_CLAUDE,
 ) -> dict:
-    """Run one executor subprocess; write timing.json; return result dict.
-
-    `applied_env_keys` is recorded in run_status.json so post-hoc debugging can
-    answer "which env vars did the runner actually inject?" without leaking
-    values (which may contain secrets).
-
-    `executor` selects the agent runtime. "claude" spawns `claude -p` (the
-    default); "opencode" spawns `opencode run`.
-
-    The subprocess cwd is an isolated `/tmp/better-skills-iso/...` directory,
-    not run_dir — so Claude Code's project-local discovery cannot reach the
-    skill being tested through cwd-upward `.claude/` traversal. Outputs still
-    land in `run_dir/outputs/` because the envelope uses absolute paths.
-    """
+    """Run one executor subprocess; write timing.json; return result dict."""
     run_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir = (run_dir / "outputs").resolve()
     outputs_dir.mkdir(exist_ok=True)
@@ -538,9 +505,6 @@ def run_executor(
         "executor_end": end_iso,
         "executor_duration_seconds": end_wall - start_wall,
     }
-    # OpenCode doesn't self-report duration; runner wall-clock is the truth.
-    # Backfill so downstream consumers (aggregate_benchmark, dashboard) read a
-    # non-zero "time_seconds" for opencode runs.
     if executor == EXECUTOR_OPENCODE and not timing.get("duration_ms"):
         timing["duration_ms"] = int((end_wall - start_wall) * 1000)
         timing["total_duration_seconds"] = end_wall - start_wall
@@ -598,17 +562,10 @@ def run_grader(
         f"Write grading.json to: {grading_path}\n"
     )
 
-    # Same isolation as the executor: grader cwd in `/tmp/better-skills-iso/`
-    # so project-level `.claude/skills/` (e.g. check/think/hunt helpers) doesn't
-    # silently bias the grader. transcript_path / outputs_dir / grading_path
-    # in the prompt are already absolute, so cwd doesn't affect file access.
     iso_cwd = _isolated_cwd(run_dir)
 
     start_iso, start_wall = _now_iso(), time.time()
     if grader_executor == EXECUTOR_OPENCODE:
-        # OpenCode has no --append-system-prompt equivalent on `opencode run`;
-        # prepend the rubric into the user prompt instead. Tool guidance still
-        # comes from OpenCode's default agent.
         merged_prompt = (
             f"{grader_system_prompt}\n\n---\n\n{user_prompt}"
             "Follow the instructions above.\n"
@@ -634,7 +591,6 @@ def run_grader(
     end_wall, end_iso = time.time(), _now_iso()
     grader_duration = end_wall - start_wall
 
-    # Append grader timings to timing.json
     timing_path = run_dir / "timing.json"
     timing = json.loads(timing_path.read_text()) if timing_path.exists() else {}
     timing["grader_start"] = start_iso
@@ -642,11 +598,6 @@ def run_grader(
     timing["grader_duration_seconds"] = grader_duration
     timing_path.write_text(json.dumps(timing, indent=2))
 
-    # Backfill grader_duration_seconds into grading.json (grader can't know its own duration).
-    # Also pin total_duration_seconds to executor wall-clock: downstream aggregate_benchmark
-    # reads this as the benchmark's "time_seconds" metric, which should mean "how long the
-    # skill took to run" — not "executor + grader overhead". Grader time is captured
-    # separately in grader_duration_seconds for diagnostics.
     grading_summary = None
     if grading_path.exists():
         try:
@@ -687,51 +638,16 @@ def run_grader(
     }
 
 
-def _resolve_mount(
-    variant: VariantConfig,
-    skill_path: Path,
-    snapshot_path: Path | None,
-) -> Path | None:
-    """Resolve a variant's mount declaration into an actual on-disk skill path
-    (or None for mount=none)."""
-    if variant.mount == "self":
-        return skill_path
-    if variant.mount == "none":
-        return None
-    if variant.mount == "snapshot":
-        if snapshot_path is None:
-            raise RuntimeError(
-                f"variant '{variant.name}' uses mount=snapshot but no snapshot_path was "
-                f"provided. Pass --snapshot-path or rely on the workspace default."
-            )
-        return snapshot_path
-    if variant.mount == "path":
-        assert variant.path
-        return Path(variant.path).expanduser().resolve()
-    raise ValueError(f"unknown mount type: {variant.mount}")
-
-
 def plan_runs(
     config: EvalsConfig,
     workspace: Path,
     iteration: int,
     skill_path: Path,
-    snapshot_path: Path | None,
+    baseline_path: Path | None,
     default_timeout: int,
     runs_per_config: int,
 ) -> list[dict]:
-    """Expand cases × variants into per-run specs. Writes eval_metadata.json into each eval dir.
-
-    Directory layout:
-      iteration-N/eval-<id>/<variant-name>/run-<k>/{transcript.jsonl, timing.json, grading.json, outputs/}
-
-    Variant names come from the config (no hardcoded with_skill/without_skill); the
-    aggregator discovers them via manifest.configs.
-
-    `case.files` entries are resolved to absolute paths against `skill_path`
-    here, since the executor's cwd is `/tmp/better-skills-iso/...` where
-    relative paths would no longer find the user's intended fixture files.
-    """
+    """Expand cases × {current, baseline} into per-run specs."""
     iteration_dir = workspace / f"iteration-{iteration}"
     runs: list[dict] = []
     for case in config.cases:
@@ -761,14 +677,20 @@ def plan_runs(
             "case_env": dict(case.env),
         }
 
+        # Each case runs both configs. `current` always mounts the live skill;
+        # `baseline` mounts whatever was resolved (or no skill if None).
+        config_to_skill = {
+            CONFIG_CURRENT: skill_path,
+            CONFIG_BASELINE: baseline_path,
+        }
         for k in range(1, runs_per_config + 1):
-            for variant in config.variants:
+            for cfg_name, cfg_skill in config_to_skill.items():
                 runs.append({
                     **common,
-                    "variant": variant.name,
+                    "config": cfg_name,
                     "run_number": k,
-                    "run_dir": eval_dir / variant.name / f"run-{k}",
-                    "skill_path": _resolve_mount(variant, skill_path, snapshot_path),
+                    "run_dir": eval_dir / cfg_name / f"run-{k}",
+                    "skill_path": cfg_skill,
                 })
 
     return runs
@@ -781,24 +703,12 @@ def _run_one(
     env_pool_q: queue.Queue | None,
     executor: str = EXECUTOR_CLAUDE,
 ) -> dict:
-    """One worker's full per-run lifecycle: acquire pool slot, merge with this
-    case's static env, run the setup script (if configured), run the executor,
-    release the slot.
-
-    Layered env construction (later wins on key conflicts):
-      pool_slot (from per_run_setup.env)  →  case.env (per-case static)
-
-    All three primitives are independent: env_pool_q can be None even when
-    setup_script or case.env are set, and vice versa. Slot release happens in
-    `finally` so a crash mid-run never leaks a slot.
-    """
+    """One worker's full per-run lifecycle."""
     pool_slot: dict | None = env_pool_q.get() if env_pool_q is not None else None
     case_env: dict = r.get("case_env") or {}
     try:
         run_dir: Path = r["run_dir"]
 
-        # Merge pool slot + case.env. case.env wins on key conflicts (the case
-        # is closer to the test's intent than a generic isolation pool slot).
         env_overrides: dict | None = None
         if pool_slot or case_env:
             env_overrides = {}
@@ -857,24 +767,12 @@ def run_phase_executor(
     setup_script: Path | None = None,
     executor: str = EXECUTOR_CLAUDE,
 ) -> list[dict]:
-    """Run executor for all `runs`. With resume=True, skip runs whose transcript
-    already contains a final result event — that's an externally-verifiable signal
-    of executor success, independent of any later grader failure.
-
-    `env_pool` and `setup_script` (the runtime forms of `per_run_setup.env` and
-    `per_run_setup.script`) are independent — pass either, both, or neither.
-    When `env_pool` is set, each worker thread holds one slot's worth of values
-    for the duration of a run. When `setup_script` is set, it runs before the
-    executor with the same env the executor will see.
-    """
+    """Run executor for all `runs`."""
     results = []
     todo = []
     skipped = 0
     for r in runs:
         if resume and _executor_completed(r["run_dir"]):
-            # Already done — synthesise a successful result so the grader phase
-            # can proceed without re-running the executor. We pull timing from
-            # disk so resumed runs still have accurate metrics.
             results.append({
                 **r,
                 "exit_code": 0,
@@ -918,7 +816,7 @@ def run_phase_executor(
             else:
                 status = f"FAIL exit={out.get('exit_code')}"
             print(
-                f"[exec {done}/{len(todo)}] eval-{r['eval_id']}/{r['variant']}/run-{r['run_number']} {status} "
+                f"[exec {done}/{len(todo)}] eval-{r['eval_id']}/{r['config']}/run-{r['run_number']} {status} "
                 f"tokens={timing.get('total_tokens', 0)} "
                 f"dur={timing.get('total_duration_seconds', 0):.1f}s",
                 file=sys.stderr,
@@ -937,21 +835,17 @@ def run_phase_grader(
     resume: bool = False,
     grader_executor: str = EXECUTOR_CLAUDE,
 ) -> list[dict]:
-    """Run grader for each executor result. Only grades runs whose executor produced
-    a usable transcript (failed executors are skipped — there's nothing to grade).
-    With resume=True, additionally skip runs that already have a parseable grading.json.
-    """
+    """Run grader for each executor result."""
     results = []
     todo = []
     skipped_no_transcript = 0
     skipped_resume = 0
     for r in executor_results:
         if not _executor_completed(r["run_dir"]):
-            # Executor failed or never ran — grading would crash on missing transcript.
             results.append({
                 "eval_id": r["eval_id"],
                 "eval_name": r["eval_name"],
-                "variant": r["variant"],
+                "config": r["config"],
                 "run_number": r["run_number"],
                 "run_dir": str(r["run_dir"]),
                 "exit_code": -1,
@@ -967,7 +861,7 @@ def run_phase_grader(
             results.append({
                 "eval_id": r["eval_id"],
                 "eval_name": r["eval_name"],
-                "variant": r["variant"],
+                "config": r["config"],
                 "run_number": r["run_number"],
                 "run_dir": str(r["run_dir"]),
                 "exit_code": 0,
@@ -1009,7 +903,7 @@ def run_phase_grader(
             gsum = out.get("grading_summary") or {}
             status = "OK" if out.get("exit_code") == 0 else f"FAIL exit={out.get('exit_code')}"
             print(
-                f"[grade {done}/{len(todo)}] eval-{r['eval_id']}/{r['variant']}/run-{r['run_number']} {status} "
+                f"[grade {done}/{len(todo)}] eval-{r['eval_id']}/{r['config']}/run-{r['run_number']} {status} "
                 f"graded={gsum.get('passed', '?')}/{gsum.get('total', '?')}",
                 file=sys.stderr,
                 flush=True,
@@ -1017,7 +911,7 @@ def run_phase_grader(
             results.append({
                 "eval_id": r["eval_id"],
                 "eval_name": r["eval_name"],
-                "variant": r["variant"],
+                "config": r["config"],
                 "run_number": r["run_number"],
                 "run_dir": str(r["run_dir"]),
                 **out,
@@ -1029,7 +923,7 @@ def _serialize_executor_result(r: dict) -> dict:
     return {
         "eval_id": r["eval_id"],
         "eval_name": r["eval_name"],
-        "variant": r["variant"],
+        "config": r["config"],
         "run_number": r["run_number"],
         "run_dir": str(r["run_dir"]),
         "skill_path": str(r["skill_path"]) if r["skill_path"] else None,
@@ -1045,7 +939,7 @@ def run_all(
     skill_path: Path,
     workspace: Path,
     iteration: int,
-    snapshot_path: Path | None = None,
+    baseline: str | None = None,
     num_workers: int | None = None,
     default_timeout: int | None = None,
     runs_per_config: int | None = None,
@@ -1054,36 +948,23 @@ def run_all(
     resume: bool = False,
     skill_name: str | None = None,
 ) -> dict:
-    """Library entry point: load config + plan + (optionally) snapshot + execute + grade + write manifest.
-
-    `evals_json` is the new-format config (see scripts/config.py). Variants and
-    defaults come from there; CLI arguments override the config defaults when
-    provided. Used directly by the `better-skills` CLI dispatcher.
-    """
+    """Library entry point: load + plan + execute + grade + manifest + skill-state dump."""
     evals_json = Path(evals_json).resolve()
     skill_path = Path(skill_path).resolve()
     workspace = Path(workspace).resolve()
 
     config = load_evals_config(evals_json)
 
-    # CLI overrides win over config defaults.
     num_workers = num_workers if num_workers is not None else config.defaults.num_workers
     default_timeout = default_timeout if default_timeout is not None else config.defaults.timeout_s
-    runs_per_config = runs_per_config if runs_per_config is not None else config.defaults.runs_per_variant
+    runs_per_config = runs_per_config if runs_per_config is not None else config.defaults.runs_per_config
     skill_name = skill_name or config.skill_name or skill_path.name
     model = config.default_model
     executor = config.executor
 
-    # Auto-snapshot whenever any variant uses mount=snapshot. Workspace default
-    # is <workspace>/skill-snapshot/. Existing snapshots are never overwritten.
-    needs_snapshot = any(v.mount == "snapshot" for v in config.variants)
-    if needs_snapshot:
-        if snapshot_path is None:
-            snapshot_path = workspace / "skill-snapshot"
-        snapshot_path = Path(snapshot_path).resolve()
-        _ensure_snapshot(skill_path, snapshot_path)
-    elif snapshot_path is not None:
-        snapshot_path = Path(snapshot_path).resolve()
+    baseline_spec = baseline if baseline is not None else config.defaults.default_baseline
+    validate_baseline_spec(baseline_spec)
+    baseline_path, baseline_resolved = resolve_baseline(baseline_spec, workspace, iteration)
 
     per_run_setup = config.defaults.per_run_setup
     setup_script_path: Path | None = None
@@ -1107,7 +988,7 @@ def run_all(
         workspace=workspace,
         iteration=iteration,
         skill_path=skill_path,
-        snapshot_path=snapshot_path,
+        baseline_path=baseline_path,
         default_timeout=default_timeout,
         runs_per_config=runs_per_config,
     )
@@ -1117,24 +998,20 @@ def run_all(
         iteration=iteration,
         skill_name=skill_name,
         skill_path=skill_path,
-        snapshot_path=snapshot_path,
-        primary_variant=config.defaults.primary_variant,
-        baseline_variant=config.defaults.baseline_variant,
+        baseline_spec=baseline_spec,
+        baseline_resolved=baseline_resolved,
+        baseline_path=baseline_path,
         evals_json=evals_json,
         model=model,
         runs=runs,
         iteration_dir=iteration_dir,
         executor=executor,
     )
-    # Always fold existing on-disk state into the skeleton — even on a non-resume
-    # re-run, the prior iteration's run dirs may have artifacts that the user can
-    # see in their viewer until our own runs overwrite them. Writing all-pending
-    # would lie about the visible state. Refresh is idempotent.
     _refresh_manifest_runs(iteration_dir, manifest)
     manifest_path = _write_manifest(iteration_dir, manifest)
 
     print(
-        f"[plan] {len(config.cases)} cases × {len(config.variants)} variants = "
+        f"[plan] {len(config.cases)} cases × 2 configs (current + baseline={baseline_resolved}) = "
         f"{len(runs)} executor runs, phase={phase}, resume={resume}, executor={executor}",
         file=sys.stderr,
         flush=True,
@@ -1151,14 +1028,9 @@ def run_all(
             setup_script=setup_script_path,
             executor=executor,
         )
-        # Refresh + rewrite manifest between phases so a viewer reading the file
-        # sees real status before grading even starts.
         _refresh_manifest_runs(iteration_dir, manifest)
         _write_manifest(iteration_dir, manifest)
     else:
-        # grader-only: only consider runs whose executor actually produced a
-        # transcript. Synthesising success for runs without transcripts would
-        # send the grader off to read non-existent files.
         executor_results = []
         skipped = 0
         for r in runs:
@@ -1179,11 +1051,6 @@ def run_all(
             raise FileNotFoundError(f"grader.md not found at {grader_md_path}")
         grader_system_prompt = grader_md_path.read_text()
         grader_executor = config.grader_executor
-        # Resolve grader model: explicit grader_model wins; otherwise reuse
-        # default_model only when grader_executor matches executor (the model
-        # id is shaped for that runtime). Cross-runtime would pass a wrong-
-        # format id (e.g. claude-only id to opencode, or provider/model to
-        # claude -p), so fall back to None and let the CLI use its default.
         if config.grader_model is not None:
             grader_model = config.grader_model
         elif grader_executor == executor:
@@ -1200,9 +1067,21 @@ def run_all(
             grader_executor=grader_executor,
         )
 
-    # Final manifest refresh: pulls in everything just written to disk.
     _refresh_manifest_runs(iteration_dir, manifest)
     _write_manifest(iteration_dir, manifest)
+
+    # Snapshot the live skill into iteration-N/skill-state/. iterate-end is the
+    # right time: the contents reflect what was just tested under `current`,
+    # so iteration N+1 with --baseline=previous gets the correct reference.
+    # Phase-only runs (e.g. grader-only re-grading) skip this; the iteration's
+    # skill-state should reflect the executor run that produced the transcripts.
+    if phase == "all":
+        try:
+            dump_skill_state(skill_path, iteration_dir)
+            print(f"[snapshot] dumped skill-state to {iteration_dir / 'skill-state'}",
+                  file=sys.stderr, flush=True)
+        except (OSError, shutil.Error) as e:
+            print(f"[snapshot] failed to dump skill-state: {e}", file=sys.stderr, flush=True)
 
     return {
         "iteration": iteration,
@@ -1210,15 +1089,13 @@ def run_all(
         "iteration_dir": str(iteration_dir),
         "manifest_path": str(manifest_path),
         "skill_path": str(skill_path),
-        "snapshot_path": str(snapshot_path) if snapshot_path else None,
-        "primary_variant": config.defaults.primary_variant,
-        "baseline_variant": config.defaults.baseline_variant,
-        "variants": [v.name for v in config.variants],
+        "baseline_spec": baseline_spec,
+        "baseline_resolved": baseline_resolved,
+        "baseline_path": str(baseline_path) if baseline_path else None,
+        "configs": [CONFIG_CURRENT, CONFIG_BASELINE],
         "phase": phase,
         "num_evals": len(config.cases),
         "num_runs": len(runs),
         "executors": [_serialize_executor_result(r) for r in executor_results],
         "graders": grader_results,
     }
-
-

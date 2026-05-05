@@ -711,13 +711,13 @@
       // Prompt
       document.getElementById("prompt-text").textContent = run.prompt;
 
-      // Config badge
+      // Config badge — every run is either "current" or "baseline".
       const badge = document.getElementById("config-badge");
-      const configMatch = run.id.match(/(with_skill|without_skill|new_skill|old_skill)/);
+      const configMatch = run.id.match(/-(current|baseline)-/);
       if (configMatch) {
         const config = configMatch[1];
-        const isBaseline = config === "without_skill" || config === "old_skill";
-        badge.textContent = config.replace(/_/g, " ");
+        const isBaseline = config === "baseline";
+        badge.textContent = config;
         badge.className = "config-badge " + (isBaseline ? "config-baseline" : "config-primary");
         badge.style.display = "inline-block";
       } else {
@@ -1132,6 +1132,9 @@
       if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
       if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
       html += (metadata.runs_per_configuration || "?") + " runs per configuration";
+      if (metadata.baseline_resolved) {
+        html += " &mdash; Baseline: <strong>" + escapeHtml(metadata.baseline_resolved) + "</strong>";
+      }
       html += "</p>";
 
       // Summary table
@@ -1153,14 +1156,16 @@
         return "";
       }
 
-      // Discover config names dynamically (everything except "delta")
-      const configs = Object.keys(summary).filter(k => k !== "delta");
-      const configA = configs[0] || "config_a";
-      const configB = configs[1] || "config_b";
-      const labelA = configA.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      const labelB = configB.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      const a = summary[configA] || {};
-      const b = summary[configB] || {};
+      // Two fixed configs: current vs baseline. Baseline header includes the
+      // resolved spec (e.g. "iteration-1", "none") so users see what was
+      // actually compared against, not just "Baseline".
+      const labelA = "Current";
+      const baselineSuffix = metadata.baseline_resolved
+        ? " (" + metadata.baseline_resolved + ")"
+        : "";
+      const labelB = "Baseline" + baselineSuffix;
+      const a = summary.current || {};
+      const b = summary.baseline || {};
       const delta = summary.delta || {};
 
       html += "<thead><tr><th>Metric</th><th>" + escapeHtml(labelA) + "</th><th>" + escapeHtml(labelB) + "</th><th>Delta</th></tr></thead>";
@@ -1211,15 +1216,17 @@
           html += "</tr></thead>";
           html += "<tbody>";
 
-          // Group by config and render with average rows
-          const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
+          // Two fixed configs in fixed order: current first, baseline second.
+          const configGroups = ["current", "baseline"];
           for (let ci = 0; ci < configGroups.length; ci++) {
             const config = configGroups[ci];
             const configRuns = evalRuns.filter(r => r.configuration === config);
             if (configRuns.length === 0) continue;
 
-            const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
-            const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+            const rowClass = config === "current" ? "benchmark-row-with" : "benchmark-row-without";
+            const configLabel = config === "current"
+              ? "Current"
+              : "Baseline" + (metadata.baseline_resolved ? " (" + metadata.baseline_resolved + ")" : "");
 
             for (const run of configRuns) {
               const r = run.result || {};

@@ -2,63 +2,76 @@
 
 Two config files per skill:
 
-  <skill>/evals.json     — functional evals (case prompts + variants for comparison)
+  <skill>/evals.json     — functional evals (case prompts + baseline declaration)
   <skill>/triggers.json  — trigger evals (description-triggering tests)
 
 Both are loaded and validated through pydantic models, giving precise field-level
 errors when an agent (or human) writes a bad config. Errors point to the JSON
 path so they are immediately actionable.
 
-Variant model (functional evals): variants are data, not hardcoded strings. Each
-variant has a `mount` describing what skill to attach for that comparison branch:
+Functional eval comparison model (evals.json):
 
-  mount=self      → mount the skill being iterated on (the canonical "with skill")
-  mount=none      → no skill (bare baseline)
-  mount=snapshot  → mount a snapshot dir (defaults to <workspace>/skill-snapshot/,
-                    auto-created on first run, deleted to refresh)
-  mount=path      → mount an explicit path; requires `path` field on the variant
+  Each iteration runs every case under exactly two configurations — `current`
+  (the live skill) and `baseline` (resolved per `default_baseline`). The
+  baseline grammar:
 
-`primary_variant` and `baseline_variant` decide the delta direction
-(delta = primary - baseline). They reference variant names from the same config.
+    none           → no skill mounted (bare model)
+    previous       → iteration-(N-1)/skill-state/ (auto-snapshotted at iterate-end)
+    iteration-N    → iteration-N/skill-state/
+    path:/abs/path → mount whatever skill lives at /abs/path
+
+  When `previous` resolves and the previous iteration's skill-state doesn't
+  exist (typical for iteration 1), the runner auto-degrades to `none`.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 
 # --- Functional eval config -------------------------------------------------
 
 
-MountType = Literal["self", "none", "snapshot", "path"]
+# Grammar for `default_baseline` and the `--baseline` CLI flag. Validated up
+# front so config errors surface at load time, not deep inside the runner.
+_BASELINE_LITERAL = {"none", "previous"}
+_BASELINE_ITERATION_RE = re.compile(r"^iteration-(\d+)$")
+_BASELINE_PATH_RE = re.compile(r"^path:(.+)$")
 
 
-class VariantConfig(BaseModel):
-    """One comparison branch. Names are user-chosen and become directory names
-    on disk (iteration-N/eval-X/<variant-name>/run-K/) and labels in the
-    benchmark output."""
+def validate_baseline_spec(value: str) -> str:
+    """Validate a baseline spec string. Returns the normalised form.
 
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(..., min_length=1, description="Variant identifier; used as a directory name and dashboard label.")
-    mount: MountType = Field(..., description="What skill to mount for this branch.")
-    path: str | None = Field(None, description="Explicit skill path; required when mount=path.")
-    description: str | None = None
-
-    @model_validator(mode="after")
-    def _check_path(self) -> "VariantConfig":
-        if self.mount == "path" and not self.path:
-            raise ValueError(f"variant '{self.name}': mount=path requires a 'path' field")
-        if self.mount != "path" and self.path:
-            raise ValueError(f"variant '{self.name}': 'path' is only valid when mount=path")
-        return self
+    Accepted: 'none' | 'previous' | 'iteration-N' (N>=1) | 'path:/abs/path'.
+    The runner does the actual resolution against a workspace at run time;
+    this is just a syntactic check so bad configs fail loud at load.
+    """
+    if value in _BASELINE_LITERAL:
+        return value
+    m = _BASELINE_ITERATION_RE.match(value)
+    if m:
+        n = int(m.group(1))
+        if n < 1:
+            raise ValueError(f"baseline 'iteration-{n}': N must be >= 1")
+        return value
+    m = _BASELINE_PATH_RE.match(value)
+    if m:
+        path = m.group(1)
+        if not path:
+            raise ValueError("baseline 'path:': path is empty")
+        return value
+    raise ValueError(
+        f"invalid baseline spec '{value}': expected 'none', 'previous', "
+        f"'iteration-N', or 'path:/abs/path'"
+    )
 
 
 class PerRunSetup(BaseModel):
@@ -121,9 +134,16 @@ class PerRunSetup(BaseModel):
 class FunctionalDefaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    primary_variant: str = Field(..., description="Variant whose results are the 'main' figure; delta = primary - baseline.")
-    baseline_variant: str = Field(..., description="Variant the primary is compared against. Required: the comparison framing is what the dashboard, viewer, and benchmark.md all assume.")
-    runs_per_variant: int = Field(1, ge=1, description="Replicate each (case × variant) N times for variance.")
+    default_baseline: str = Field(
+        "previous",
+        description=(
+            "What to compare `current` against. Grammar: 'none' (bare model), "
+            "'previous' (iteration-(N-1)/skill-state/, auto-degrades to 'none' "
+            "if absent), 'iteration-N' (specific past iteration), 'path:/abs' "
+            "(any skill directory). Override per-invocation with --baseline."
+        ),
+    )
+    runs_per_config: int = Field(1, ge=1, description="Replicate each (case × current/baseline) N times for variance.")
     timeout_s: int = Field(600, ge=1, description="Default per-run timeout in seconds.")
     num_workers: int = Field(4, ge=1, description="Parallel subprocess workers.")
     per_run_setup: PerRunSetup | None = Field(
@@ -134,6 +154,11 @@ class FunctionalDefaults(BaseModel):
             "references/evals-schema.md#per-run-setup for symptoms and recipes."
         ),
     )
+
+    @model_validator(mode="after")
+    def _check_baseline_grammar(self) -> "FunctionalDefaults":
+        validate_baseline_spec(self.default_baseline)
+        return self
 
     @model_validator(mode="after")
     def _check_pool_vs_workers(self) -> "FunctionalDefaults":
@@ -165,7 +190,7 @@ class CaseConfig(BaseModel):
             "identity, e.g. {'FEATURE': 'A'} for one case, {'FEATURE': 'B'} "
             "for another). Layered on top of the shell env and any "
             "per_run_setup.env pool slot — case.env wins on key conflicts. "
-            "These values are static across replicates and variants of the "
+            "These values are static across replicates and current/baseline of the "
             "case; for parallel-run isolation use per_run_setup.env instead."
         ),
     )
@@ -190,38 +215,16 @@ class EvalsConfig(BaseModel):
     executor: Literal["claude", "opencode"] = Field("claude", description="Agent runtime for the executor subprocess.")
     grader_executor: Literal["claude", "opencode"] = Field("claude", description="Agent runtime for the grader subprocess. Independent of `executor` — pin this once per skill so grading stays consistent across iterations.")
     grader_model: str | None = Field(None, description="Model id for the grader subprocess. Use `provider/model` form when grader_executor=opencode. When unset, falls back to `default_model` if grader_executor matches executor, otherwise the chosen CLI's own default.")
-    variants: list[VariantConfig] = Field(..., min_length=1)
     defaults: FunctionalDefaults
     cases: list[CaseConfig] = Field(..., min_length=1)
 
     @model_validator(mode="after")
-    def _check_variant_refs(self) -> "EvalsConfig":
-        names = {v.name for v in self.variants}
-        if len(names) != len(self.variants):
-            dups = [v.name for v in self.variants if [x.name for x in self.variants].count(v.name) > 1]
-            raise ValueError(f"duplicate variant names: {sorted(set(dups))}")
-        if self.defaults.primary_variant not in names:
-            raise ValueError(
-                f"defaults.primary_variant '{self.defaults.primary_variant}' not in variants {sorted(names)}"
-            )
-        if self.defaults.baseline_variant not in names:
-            raise ValueError(
-                f"defaults.baseline_variant '{self.defaults.baseline_variant}' not in variants {sorted(names)}"
-            )
-        if self.defaults.baseline_variant == self.defaults.primary_variant:
-            raise ValueError("defaults.baseline_variant cannot equal primary_variant")
-        # Case IDs must be unique
+    def _check_case_ids(self) -> "EvalsConfig":
         ids = [c.id for c in self.cases]
         if len(set(ids)) != len(ids):
             dups = [i for i in ids if ids.count(i) > 1]
             raise ValueError(f"duplicate case ids: {sorted(set(dups))}")
         return self
-
-    def get_variant(self, name: str) -> VariantConfig:
-        for v in self.variants:
-            if v.name == name:
-                return v
-        raise KeyError(f"unknown variant: {name}")
 
     def resolve_prompt(self, case: CaseConfig, skill_path: Path) -> str:
         """Read the case's prompt — inline or from prompt_file relative to skill_path."""

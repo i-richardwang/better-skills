@@ -177,7 +177,7 @@ The on-disk layout the orchestrator builds:
     ├── viewer.log                      (when viewer launched in background)
     └── eval-<id>/
         ├── eval_metadata.json          (regenerated from evals.json each run)
-        └── <variant-name>/             (one dir per variant declared in evals.json)
+        └── current/ or baseline/      (always these two directory names)
             └── run-<k>/
                 ├── transcript.jsonl
                 ├── stderr.log
@@ -186,15 +186,18 @@ The on-disk layout the orchestrator builds:
                 ├── grader_transcript.jsonl
                 ├── run_status.json     (status checkpoint for --resume)
                 └── outputs/
+    └── skill-state/                    (auto-snapshot of the live skill,
+                                         dumped at iterate-end so future
+                                         iterations can compare against it)
 ```
 
-The `eval-<id>` / `run-<k>` naming is convention — `better-skills aggregate`, the viewer, and the dashboard upload all expect it. Variant directory names come from your `evals.json` (e.g. `with_skill`, `without_skill`, `old_skill`) — they're declared in the `variants:` list and not hardcoded anywhere in the scripts.
+Every iteration runs each case under exactly two configurations: `current` (the live skill at `--skill-path`) and `baseline` (resolved from `default_baseline` in evals.json or the `--baseline` CLI flag). The directory names are fixed.
 
 ### Step 1: Run one full iteration with `better-skills iterate`
 
-`scripts/cli.py` exposes a single `better-skills` CLI with one subcommand per pipeline stage. `iterate` is the default — it snapshots the skill (when needed), runs all executors + graders in parallel, writes a per-iteration manifest, aggregates into `benchmark.json`/`benchmark.md`, and launches the viewer in the background — all from one command.
+`scripts/cli.py` exposes a single `better-skills` CLI with one subcommand per pipeline stage. `iterate` is the default — it runs all executors + graders in parallel, writes a per-iteration manifest, dumps the live skill into `iteration-N/skill-state/` for future-iteration comparisons, aggregates into `benchmark.json`/`benchmark.md`, and launches the viewer in the background — all from one command.
 
-Before launching, ensure `<skill>/evals.json` exists with `variants` + `defaults` + `cases` (see `references/evals-schema.md` for the schema, or `better-skills init <skill-path>` to scaffold a starting template).
+Before launching, ensure `<skill>/evals.json` exists with `defaults` + `cases` (see `references/evals-schema.md` for the schema, or `better-skills init <skill-path>` to scaffold a starting template).
 
 **Invocation** — launch as a **background Bash tool call** (`run_in_background: true`) so you can draft assertions while it runs:
 
@@ -207,9 +210,12 @@ python -m scripts.cli iterate \
 
 Run it **from the better-skills directory** (so `python -m scripts.*` resolves).
 
-**Baseline modes** are now declared in evals.json's `variants:` list, not via a CLI flag:
-- **Creating a new skill**: scaffold puts `with_skill` (mount=self) + `without_skill` (mount=none) — baseline runs Claude with no skill mounted.
-- **Improving an existing skill**: add a third variant `old_skill` with `mount: snapshot`. `iterate` automatically creates `<workspace>/skill-snapshot/` from `--skill-path` on first run if absent, then reuses it on subsequent runs. To refresh the baseline (e.g., between iterations) delete the snapshot dir; the next run re-snapshots from the current skill. Or just rename the variant — anything goes.
+**Baseline modes** are declared via `default_baseline` in evals.json (overridable per-invocation with `--baseline`). Grammar: `none | previous | iteration-N | path:/abs/path`.
+- **Creating a new skill / first iteration**: `default_baseline: "previous"` is the right default — iteration 1 has no previous, so it auto-degrades to `none` (bare model, no skill). Iteration 2+ then automatically compares against iteration N-1's `skill-state/` snapshot.
+- **Long-term progress against a fixed reference**: `default_baseline: "iteration-1"` (or any earlier iteration). Useful for "how much have I improved since the start" rather than "did this iteration help".
+- **Compare against an external skill version**: `--baseline path:/abs/path/to/other-skill` — pair with `git worktree add /tmp/skill-prev <commit>` to compare against any past commit.
+
+The runner auto-snapshots the live skill into `iteration-N/skill-state/` at iterate-end, so `previous` and `iteration-N` resolve naturally on subsequent runs. No manual snapshot management.
 
 **Executor and grader runtimes** are configured in `evals.json` (`executor`, `grader_executor`, `default_model`, `grader_model`). Default is Claude for both; switch to `opencode` when the user only has OpenCode access. See `references/evals-schema.md` for the schema.
 
@@ -217,7 +223,8 @@ Run it **from the better-skills directory** (so `python -m scripts.*` resolves).
 - `--evals-json <path>` — defaults to `<skill-path>/evals.json`
 - `--num-workers N` — parallelism
 - `--default-timeout SEC` — per-run ceiling; per-case override via a `timeout_s` field in evals.json
-- `--runs-per-config N` — replicate each case × variant N times for variance analysis
+- `--baseline <spec>` — override `default_baseline` from evals.json (`none | previous | iteration-N | path:/abs`)
+- `--runs-per-config N` — replicate each case × config N times for variance analysis
 - `--resume` — skip runs whose transcript already shows executor success (and `grading.json` exists for the grader phase). Use after a crash, network blip, or to add new runs to a partial iteration.
 - `--phase executor` / `--phase grader` — run only one phase. Useful when interleaving manual work between phases.
 - `--no-view` / `--no-aggregate` — skip the trailing steps when you only want raw runs.
@@ -308,9 +315,9 @@ When the user tells you they're done, read `feedback.json`:
 ```json
 {
   "reviews": [
-    {"run_id": "eval-0-with_skill", "feedback": "the chart is missing axis labels", "timestamp": "..."},
-    {"run_id": "eval-1-with_skill", "feedback": "", "timestamp": "..."},
-    {"run_id": "eval-2-with_skill", "feedback": "perfect, love this", "timestamp": "..."}
+    {"run_id": "eval-0-current", "feedback": "the chart is missing axis labels", "timestamp": "..."},
+    {"run_id": "eval-1-current", "feedback": "", "timestamp": "..."},
+    {"run_id": "eval-2-current", "feedback": "perfect, love this", "timestamp": "..."}
   ],
   "status": "complete"
 }
@@ -329,7 +336,6 @@ kill <viewer_pid> 2>/dev/null
 `iterate` is a thin orchestrator over `better-skills`'s other subcommands. They stay supported for finer control:
 
 - **Scaffold a skill's eval configs**: `python -m scripts.cli init <skill-path>` — writes a starter `evals.json` + `triggers.json`.
-- **Just snapshot**: `python -m scripts.cli snapshot <skill-path> --workspace <ws>` — creates `<ws>/skill-snapshot/` if absent. Pass `--force` to overwrite.
 - **Just re-run the executor**: `python -m scripts.cli run --skill-path … --workspace … --iteration N --phase executor`. Use `--resume` to skip runs whose transcript already shows success.
 - **Just re-grade** without re-executing (e.g., after editing assertions): `python -m scripts.cli run … --phase grader --resume`. Already-graded runs are skipped.
 - **Re-aggregate** an existing iteration: `python -m scripts.cli aggregate <workspace>/iteration-N`. The iteration's `manifest.json` is required.
@@ -362,7 +368,7 @@ This task is pretty important (we are trying to create billions a year in econom
 After improving the skill:
 
 1. Apply your improvements to the skill
-2. Rerun all test cases into a new `iteration-<N+1>/` directory: `python -m scripts.cli iterate --skill-path … --workspace … --iteration <N+1> --previous-iteration <N>`. The variants come from `evals.json`, so you don't pass them on the CLI. If you're improving an existing skill and using a `mount: snapshot` baseline, `rm -rf <workspace>/skill-snapshot/` before running to use the just-finished iteration as the new baseline (the next run will re-snapshot from the current skill).
+2. Rerun all test cases into a new `iteration-<N+1>/` directory: `python -m scripts.cli iterate --skill-path … --workspace … --iteration <N+1> --previous-iteration <N>`. With `default_baseline: "previous"` (the recommended default), iteration `<N+1>` automatically compares against iteration `<N>`'s `skill-state/` snapshot — no manual baseline management. To compare against a different prior iteration for one run, pass `--baseline iteration-<K>`.
 3. The viewer launches automatically with the previous iteration as the diff target
 4. Wait for the user to review and tell you they're done
 5. Read the new feedback, improve again, repeat
@@ -515,7 +521,7 @@ The agents/ directory contains role specs the runner uses for the grader, compar
 - `agents/analyzer.md` — How to analyze why one version beat another
 
 The references/ directory has additional documentation:
-- `references/evals-schema.md` — The `evals.json` (variants + defaults + cases) and `triggers.json` schema.
+- `references/evals-schema.md` — The `evals.json` (defaults + baseline grammar + cases) and `triggers.json` schema.
 - `references/schemas.md` — Other JSON structures (grading.json, etc.).
 - `references/manifest-schema.md` — The per-iteration `manifest.json` + `run_status.json` format that `iterate` writes and downstream scripts read.
 

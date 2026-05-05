@@ -249,10 +249,10 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
   },
 
   "notes": [
-    "Assertion 'Output is a PDF file' passes 100% in both configurations - may not differentiate skill value",
-    "Eval 3 shows high variance (50% ± 40%) - may be flaky or model-dependent",
-    "Without-skill runs consistently fail on table extraction expectations",
-    "Skill adds 13s average execution time but improves pass rate by 50%"
+    "Assertion 'Output is a PDF file' passes 100% in both `current` and `baseline` — may not differentiate the current skill",
+    "Eval 3 shows high variance under `current` (50% ± 40%) — may be flaky or model-dependent",
+    "`baseline` runs consistently fail on table extraction expectations",
+    "`current` adds 13s average execution time but improves pass rate by 50% over `baseline`"
   ]
 }
 ```
@@ -266,10 +266,10 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
 - `runs[]`: Individual run results
   - `eval_id`: Numeric eval identifier
   - `eval_name`: Human-readable eval name (used as section header in the viewer)
-  - `configuration`: Variant name from `evals.json` (user-chosen, e.g. `"primary"` / `"baseline"` or `"with_skill"` / `"without_skill"`). The dashboard groups runs by this string and matches it against `metadata.primary_variant` / `metadata.baseline_variant`.
+  - `configuration`: Always one of `"current"` or `"baseline"`. The dashboard groups runs by this string.
   - `run_number`: Integer run number (1, 2, 3...)
   - `result`: Nested object with `pass_rate`, `passed`, `total`, `time_seconds`, `tokens`, `errors`
-- `run_summary`: Statistical aggregates keyed by variant name (matching `runs[].configuration`). Each variant entry contains `pass_rate`, `time_seconds`, `tokens` objects with `mean` and `stddev` fields. `delta` holds difference strings like `"+0.50"`, `"+13.0"`, `"+1700"` (computed as `primary_variant − baseline_variant`).
+- `run_summary`: Statistical aggregates keyed by `"current"` and `"baseline"`. Each contains `pass_rate`, `time_seconds`, `tokens` objects with `mean` and `stddev` fields. `delta` holds difference strings like `"+0.50"`, `"+13.0"`, `"+1700"` (computed as `current − baseline`).
 - `notes`: Freeform observations from the analyzer
 
 **Important:** The viewer reads these field names exactly. Using `config` instead of `configuration`, or putting `pass_rate` at the top level of a run instead of nested under `result`, will cause the viewer to show empty/zero values. Always reference this schema when generating benchmark.json manually.

@@ -205,16 +205,19 @@ You receive these parameters in your prompt:
 ### Step 1: Read Benchmark Data
 
 1. Read the benchmark.json containing all run results
-2. Note the configurations tested (with_skill, without_skill)
+2. Note the configurations tested (always `current` and `baseline`; the run_summary metadata records which version `baseline` resolved to)
 3. Understand the run_summary aggregates already calculated
 
 ### Step 2: Analyze Per-Assertion Patterns
 
-For each expectation across all runs:
-- Does it **always pass** in both configurations? (may not differentiate skill value)
+For each expectation across all runs (`current` = the live skill, `baseline` =
+whatever `default_baseline` resolved to — possibly `none`, possibly a prior
+iteration):
+
+- Does it **always pass** in both configurations? (may not differentiate the current skill)
 - Does it **always fail** in both configurations? (may be broken or beyond capability)
-- Does it **always pass with skill but fail without**? (skill clearly adds value here)
-- Does it **always fail with skill but pass without**? (skill may be hurting)
+- Does it **pass under `current` but fail under `baseline`**? (current clearly improves here)
+- Does it **fail under `current` but pass under `baseline`**? (current may be regressing)
 - Is it **highly variable**? (flaky expectation or non-deterministic behavior)
 
 ### Step 3: Analyze Cross-Eval Patterns
@@ -227,7 +230,7 @@ Look for patterns across evals:
 ### Step 4: Analyze Metrics Patterns
 
 Look at time_seconds, tokens, tool_calls:
-- Does the skill significantly increase execution time?
+- Does `current` significantly increase execution time vs `baseline`?
 - Is there high variance in resource usage?
 - Are there outlier runs that skew the aggregates?
 
@@ -239,12 +242,12 @@ Write freeform observations as a list of strings. Each note should:
 - Help the user understand something the aggregate metrics don't show
 
 Examples:
-- "Assertion 'Output is a PDF file' passes 100% in both configurations - may not differentiate skill value"
-- "Eval 3 shows high variance (50% ± 40%) - run 2 had an unusual failure that may be flaky"
-- "Without-skill runs consistently fail on table extraction expectations (0% pass rate)"
-- "Skill adds 13s average execution time but improves pass rate by 50%"
-- "Token usage is 80% higher with skill, primarily due to script output parsing"
-- "All 3 without-skill runs for eval 1 produced empty output"
+- "Assertion 'Output is a PDF file' passes 100% in both `current` and `baseline` — may not differentiate the current skill"
+- "Eval 3 shows high variance under `current` (50% ± 40%) — run 2 had an unusual failure that may be flaky"
+- "`baseline` runs consistently fail on table extraction expectations (0% pass rate)"
+- "`current` adds 13s average execution time but improves pass rate by 50% over `baseline`"
+- "Token usage is 80% higher under `current`, primarily due to script output parsing"
+- "All 3 `baseline` runs for eval 1 produced empty output"
 
 ### Step 6: Write Notes
 
@@ -252,10 +255,10 @@ Save notes to `{output_path}` as a JSON array of strings:
 
 ```json
 [
-  "Assertion 'Output is a PDF file' passes 100% in both configurations - may not differentiate skill value",
-  "Eval 3 shows high variance (50% ± 40%) - run 2 had an unusual failure",
-  "Without-skill runs consistently fail on table extraction expectations",
-  "Skill adds 13s average execution time but improves pass rate by 50%"
+  "Assertion 'Output is a PDF file' passes 100% in both `current` and `baseline` — may not differentiate the current skill",
+  "Eval 3 shows high variance under `current` (50% ± 40%) — run 2 had an unusual failure",
+  "`baseline` runs consistently fail on table extraction expectations",
+  "`current` adds 13s average execution time but improves pass rate by 50% over `baseline`"
 ]
 ```
 

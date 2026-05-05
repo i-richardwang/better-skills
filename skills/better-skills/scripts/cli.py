@@ -3,9 +3,8 @@
 
 Subcommands:
 
-  Functional pipeline (test what the skill produces under variants):
+  Functional pipeline (test what the skill produces):
     init           Scaffold evals.json + triggers.json templates in a skill dir.
-    snapshot       Capture current skill state into <workspace>/skill-snapshot/.
     run            Run executors + graders for one iteration; writes manifest.
     aggregate      Roll per-run grading.json files into benchmark.json + .md.
     iterate        Full pipeline: run + aggregate + upload + view (recommended).
@@ -42,29 +41,21 @@ from .config import (
     FunctionalDefaults,
     TriggerQuery,
     TriggersConfig,
-    VariantConfig,
     find_evals_config,
+    validate_baseline_spec,
 )
 
 
 # --- init -------------------------------------------------------------------
 #
 # Templates round-trip through the pydantic models so every default value
-# (runs_per_variant, timeout_s, trigger_threshold, holdout, ...) lives in
-# config.py only. Adding a new default never requires editing this file.
+# (default_baseline, runs_per_config, timeout_s, ...) lives in config.py only.
 
 
 def _evals_template(skill_name: str) -> dict:
     template = EvalsConfig(
         skill_name=skill_name,
-        variants=[
-            VariantConfig(name="with_skill", mount="self"),
-            VariantConfig(name="without_skill", mount="none"),
-        ],
-        defaults=FunctionalDefaults(
-            primary_variant="with_skill",
-            baseline_variant="without_skill",
-        ),
+        defaults=FunctionalDefaults(default_baseline="previous"),
         cases=[
             CaseConfig(
                 id=1,
@@ -74,10 +65,6 @@ def _evals_template(skill_name: str) -> dict:
             )
         ],
     ).model_dump(exclude_none=True)
-    # Drop empty collections from each case so the scaffold stays minimal —
-    # users can read the schema doc to discover optional fields like `files`,
-    # `env`, `prompt_file`. Defaults block keeps its values (num_workers etc.)
-    # since those are pedagogical defaults, not empty placeholders.
     template["cases"] = [
         {k: v for k, v in c.items() if v not in ({}, [])}
         for c in template["cases"]
@@ -130,29 +117,6 @@ def cmd_init(args: argparse.Namespace) -> dict:
     return {"status": "ok", "created": created, "skipped": skipped}
 
 
-# --- snapshot ---------------------------------------------------------------
-
-
-def cmd_snapshot(args: argparse.Namespace) -> dict:
-    skill_path = Path(args.skill_path).resolve()
-    workspace = Path(args.workspace).resolve()
-    snapshot_path = (
-        Path(args.snapshot_path).resolve() if args.snapshot_path
-        else workspace / "skill-snapshot"
-    )
-    if snapshot_path.exists() and not args.force:
-        return {
-            "status": "exists",
-            "snapshot_path": str(snapshot_path),
-            "message": "snapshot already exists; pass --force to overwrite",
-        }
-    if snapshot_path.exists() and args.force:
-        import shutil
-        shutil.rmtree(snapshot_path)
-    run_functional_eval._ensure_snapshot(skill_path, snapshot_path)
-    return {"status": "created", "snapshot_path": str(snapshot_path)}
-
-
 # --- run --------------------------------------------------------------------
 
 
@@ -163,12 +127,14 @@ def cmd_run(args: argparse.Namespace) -> dict:
         Path(args.evals_json).resolve() if args.evals_json
         else find_evals_config(skill_path).resolve()
     )
+    if args.baseline is not None:
+        validate_baseline_spec(args.baseline)
     return run_functional_eval.run_all(
         evals_json=evals_json,
         skill_path=skill_path,
         workspace=workspace,
         iteration=args.iteration,
-        snapshot_path=Path(args.snapshot_path).resolve() if args.snapshot_path else None,
+        baseline=args.baseline,
         num_workers=args.num_workers,
         default_timeout=args.default_timeout,
         runs_per_config=args.runs_per_config,
@@ -197,9 +163,8 @@ def cmd_aggregate(args: argparse.Namespace) -> dict:
         "status": "ok",
         "benchmark_json": str(bench_json),
         "benchmark_md": str(bench_md),
-        "variants": benchmark["metadata"].get("variants", []),
-        "primary_variant": benchmark["metadata"].get("primary_variant"),
-        "baseline_variant": benchmark["metadata"].get("baseline_variant"),
+        "baseline_spec": benchmark["metadata"].get("baseline_spec"),
+        "baseline_resolved": benchmark["metadata"].get("baseline_resolved"),
     }
 
 
@@ -269,21 +234,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Overwrite existing files.")
     sp.set_defaults(handler=cmd_init)
 
-    # snapshot
-    sp = sub.add_parser("snapshot", help="Snapshot the skill into <workspace>/skill-snapshot/.")
-    sp.add_argument("skill_path")
-    sp.add_argument("--workspace", required=True)
-    sp.add_argument("--snapshot-path", default=None)
-    sp.add_argument("--force", action="store_true", help="Overwrite existing snapshot.")
-    sp.set_defaults(handler=cmd_snapshot)
-
     # run / iterate share the executor flag set
     def _add_run_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--skill-path", required=True)
         p.add_argument("--workspace", required=True)
         p.add_argument("--iteration", type=int, required=True)
         p.add_argument("--evals-json", default=None)
-        p.add_argument("--snapshot-path", default=None)
+        p.add_argument("--baseline", default=None,
+                       help="Override default_baseline. Grammar: none | previous | iteration-N | path:/abs/path.")
         p.add_argument("--num-workers", type=int, default=None)
         p.add_argument("--default-timeout", type=int, default=None)
         p.add_argument("--runs-per-config", type=int, default=None)

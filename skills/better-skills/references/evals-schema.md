@@ -2,48 +2,31 @@
 
 Two JSON files per skill, both validated by `scripts/config.py`:
 
-- `<skill>/evals.json` — functional eval cases + variants (consumed by `better-skills run/iterate`)
+- `<skill>/evals.json` — functional eval cases + baseline declaration (consumed by `better-skills run/iterate`)
 - `<skill>/triggers.json` — trigger eval queries (consumed by `better-skills trigger-eval/trigger-loop`)
-
-Both default to `<skill>/<file>.json`. Legacy fallback: `<skill>/evals/<file>.json`.
 
 Use `python -m scripts.cli init <skill-path>` to scaffold starter templates.
 
 ## evals.json
 
+Each iteration runs every case under exactly two configurations: `current`
+(the live skill at `--skill-path`) and `baseline` (resolved per
+`default_baseline` or the `--baseline` CLI flag). After the runs finish, the
+runner snapshots the live skill into `iteration-N/skill-state/` so future
+iterations can compare against it.
+
 ```jsonc
 {
-  "version": 2,
+  "version": 3,
   "skill_name": "my-skill",                    // optional; defaults to skill dir name
-  "default_model": "claude-opus-4-7",          // executor model id; use "provider/model" form when executor=opencode
+  "default_model": "claude-opus-4-7",          // executor model id; "provider/model" form when executor=opencode
   "executor": "claude",                        // "claude" or "opencode"
   "grader_executor": "claude",                 // "claude" or "opencode"; defaults to "claude"
   "grader_model": null,                        // grader model id; null = inherit default_model when grader_executor==executor, else CLI default
 
-  "variants": [                                // each declared variant becomes
-    {                                          // a directory under iteration-N/eval-X/
-      "name": "with_skill",                    // user-chosen identifier
-      "mount": "self"                          // self / none / snapshot / path
-    },
-    {
-      "name": "without_skill",
-      "mount": "none"
-    },
-    {
-      "name": "old_skill",
-      "mount": "snapshot"                      // uses <workspace>/skill-snapshot/
-    },
-    {
-      "name": "experimental",
-      "mount": "path",
-      "path": "/abs/path/to/skill-v3"          // required when mount=path
-    }
-  ],
-
   "defaults": {
-    "primary_variant": "with_skill",           // delta = primary - baseline
-    "baseline_variant": "without_skill",       // null = no delta
-    "runs_per_variant": 1,                     // replicate count per case×variant
+    "default_baseline": "previous",            // none | previous | iteration-N | path:/abs
+    "runs_per_config": 1,                      // replicate count per case×config
     "timeout_s": 600,                          // per-run subprocess timeout
     "num_workers": 4,                          // parallel workers
     "per_run_setup": null                      // optional, advanced; see "Per-run setup" below
@@ -71,6 +54,21 @@ Use `python -m scripts.cli init <skill-path>` to scaffold starter templates.
 }
 ```
 
+### Baseline grammar
+
+`default_baseline` (and the `--baseline` CLI override) take one of:
+
+| Spec | What it points at |
+|---|---|
+| `none` | No skill mounted (bare model — the canonical "no skill" baseline) |
+| `previous` | `iteration-(N-1)/skill-state/`, auto-degrades to `none` if absent (typical for iteration 1) |
+| `iteration-K` | `iteration-K/skill-state/` for an explicit prior iteration. Pin to compare against a fixed historical version. |
+| `path:/abs/path` | Mount any directory you point at — useful with `git worktree add`, or for comparing against a sibling skill. |
+
+The runner records the resolved value in `manifest.json` as
+`baseline_resolved` (e.g. `"iteration-2"` even if the spec was `"previous"`),
+so post-hoc inspection knows what was actually compared against.
+
 ### Executor and grader runtimes
 
 The grader is the measurement instrument: pin `grader_executor` and
@@ -81,24 +79,12 @@ When `grader_model` is null, the runner reuses `default_model` if
 `grader_executor == executor`, otherwise lets the chosen CLI pick its own
 default.
 
-### Mount types
-
-| Mount | Behavior |
-|---|---|
-| `self` | Mount the skill at `--skill-path` (the canonical "with skill" branch) |
-| `none` | No skill mounted (bare baseline) |
-| `snapshot` | Mount `<workspace>/skill-snapshot/`, auto-created on first run if absent. Delete the dir to refresh between iterations. |
-| `path` | Mount the explicit `path` field. Use for testing forks/branches. |
-
 ### Validation rules (enforced by pydantic)
 
-- At least one variant; names must be unique.
-- `defaults.primary_variant` must reference an existing variant.
-- `defaults.baseline_variant` (if set) must be a different existing variant.
+- `default_baseline` must match the grammar above.
 - Each case must set exactly one of `prompt` or `prompt_file`.
 - Case IDs must be unique.
-- `mount: path` requires the `path` field; other mounts must omit it.
-- `runs_per_variant`, `timeout_s`, `num_workers` must be ≥ 1.
+- `runs_per_config`, `timeout_s`, `num_workers` must be ≥ 1.
 - `per_run_setup.env` (if set): every list must be non-empty, all keys equal
   length, and each list ≥ `num_workers`.
 - `per_run_setup.script` (if set): file must exist under the skill dir and be
@@ -108,7 +94,7 @@ Bad configs fail with field-level error messages pointing at the JSON path:
 
 ```
 config validation failed (2 error(s)):
-  - defaults.primary_variant: 'with_kill' not in variants ['with_skill', 'without_skill']
+  - defaults.default_baseline: invalid baseline spec 'iter-1': expected 'none', 'previous', 'iteration-N', or 'path:/abs/path'
   - cases.1: must set prompt or prompt_file
 ```
 
@@ -126,7 +112,7 @@ another tests `FEATURE=B`:
 ```
 
 Layered on top of the shell env — `case.env` wins on key conflicts. Case env
-is **static across replicates and variants** of the same case: every parallel
+is **static across replicates and configs** of the same case: every parallel
 run of case-1 sees `FEATURE=A`. Don't use it to provide isolation between
 parallel replicates of the same case (use `per_run_setup.env` for that).
 
@@ -275,7 +261,7 @@ when the run finishes (even on crash, via `finally`).
 Path relative to the skill dir; must be executable. Invoked before each
 executor subprocess with:
 
-- **cwd** = the run's directory (`iteration-N/eval-X/<variant>/run-K/`)
+- **cwd** = the run's directory (`iteration-N/eval-X/<config>/run-K/`)
 - **env** = the run's full environment (shell env + pool slot + `case.env`)
 - **stdout/stderr** captured to `setup_stdout.log` / `setup_stderr.log`
   inside the run dir
@@ -306,12 +292,12 @@ broken). The keys actually applied are recorded in `run_status.json` as
 ## triggers.json
 
 Trigger evals test whether the skill's *description* causes the configured
-runtime to invoke the skill on relevant queries. No variants — the variable
+runtime to invoke the skill on relevant queries. No baseline — the variable
 being tested is the description itself, mutated in-place by `trigger-improve`.
 
 ```jsonc
 {
-  "version": 2,
+  "version": 3,
   "skill_name": "my-skill",
   "default_model": "claude-opus-4-7",          // model used by the trigger-test subprocess; provider/model form when executor=opencode
   "executor": "claude",                        // "claude" or "opencode" — runtime that runs each trigger query
@@ -349,17 +335,3 @@ aren't directly comparable.
 - `trigger_threshold` ∈ [0, 1].
 - `holdout` ∈ [0, 1).
 - All defaults are optional and have sensible fallbacks.
-
-## Why this layout
-
-- **Variants are data, not code**: adding a fourth variant means editing
-  `evals.json`, not the python scripts. The dashboard reads variant names
-  from the manifest and renders whatever's there.
-- **Single source of truth**: there's no separate file declaring "primary is
-  with_skill, delta direction is positive" — the config says it, the manifest
-  records it, the aggregator reads it.
-- **Schema-validated**: writing a bad config produces a clear error pointing
-  at the offending field, not a `KeyError` deep in `aggregate_benchmark.py`.
-- **JSON, not YAML**: agents edit these files via the Edit tool — JSON's
-  unambiguous structure beats YAML's indent-sensitive grammar. Long prompts
-  go in separate `.md` files via `prompt_file` to avoid escape hell.

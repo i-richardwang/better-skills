@@ -2,13 +2,13 @@
 
 Driven by `scripts.cli iterate`. Wraps the per-iteration ritual:
 
-  1. Auto-snapshot the skill into <workspace>/skill-snapshot/ if any variant
-     in evals.json declares mount=snapshot (only when no snapshot exists yet).
-  2. Plan + run executors and graders via run_functional_eval.run_all, writing
-     iteration-N/manifest.json and per-run run_status.json.
-  3. Aggregate into iteration-N/benchmark.json + benchmark.md and fire the
+  1. Plan + run executors and graders via run_functional_eval.run_all, writing
+     iteration-N/manifest.json and per-run run_status.json. The runner also
+     dumps the live skill into iteration-N/skill-state/ at iterate-end so
+     future iterations can resolve --baseline=previous.
+  2. Aggregate into iteration-N/benchmark.json + benchmark.md and fire the
      fail-soft dashboard upload (if SKILL_DASHBOARD_URL/TOKEN are set).
-  4. Launch the eval-viewer in the background unless --no-view, returning the
+  3. Launch the eval-viewer in the background unless --no-view, returning the
      viewer pid so the agent can kill it later.
 """
 
@@ -83,13 +83,13 @@ def run_iteration(args: argparse.Namespace) -> dict:
     if not evals_json.exists():
         raise FileNotFoundError(f"evals.json not found at {evals_json}")
 
-    # 1 + 2: snapshot (auto inside run_all) + executors + graders + manifest
+    # 1: executors + graders + manifest + iterate-end skill-state dump
     summary = run_functional_eval.run_all(
         evals_json=evals_json,
         skill_path=skill_path,
         workspace=workspace,
         iteration=args.iteration,
-        snapshot_path=Path(args.snapshot_path) if args.snapshot_path else None,
+        baseline=args.baseline,
         num_workers=args.num_workers,
         default_timeout=args.default_timeout,
         runs_per_config=args.runs_per_config,
@@ -103,7 +103,7 @@ def run_iteration(args: argparse.Namespace) -> dict:
     benchmark_path: Path | None = None
     viewer_pid: int | None = None
 
-    # 3: aggregate
+    # 2: aggregate
     if not args.no_aggregate:
         benchmark = aggregate_benchmark.generate_benchmark(
             iteration_dir,
@@ -126,7 +126,7 @@ def run_iteration(args: argparse.Namespace) -> dict:
         except Exception as e:
             print(f"[dashboard] hook skipped: {e}", file=sys.stderr)
 
-    # 4: viewer
+    # 3: viewer
     if not args.no_view and not args.no_aggregate and benchmark_path is not None:
         prev_dir = None
         if args.previous_iteration is not None:

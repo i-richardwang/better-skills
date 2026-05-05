@@ -31,9 +31,6 @@ from typing import Optional
 from .config import ConfigError, load_evals_config
 
 
-MANIFEST_FILE = "manifest.json"
-
-
 # --- Skill file scanner -----------------------------------------------------
 #
 # Captures the rest of the skill directory (sub-docs, agents, scripts, refs)
@@ -168,30 +165,14 @@ def _read_json(path: Path) -> Optional[dict]:
         return None
 
 
-def _allowed_configs(benchmark_dir: Path) -> set[str]:
-    """Variant names to upload — read from the manifest (authoritative)."""
-    manifest_path = benchmark_dir / MANIFEST_FILE
-    manifest = _read_json(manifest_path)
-    if not isinstance(manifest, dict):
-        raise FileNotFoundError(
-            f"manifest.json missing or unreadable at {manifest_path}; cannot determine "
-            f"which variants to upload"
-        )
-    configs = manifest.get("configs")
-    if not isinstance(configs, list) or not configs:
-        raise ValueError(
-            f"manifest.json at {manifest_path} has no 'configs' list"
-        )
-    return set(configs)
+_ALLOWED_CONFIGS = frozenset({"current", "baseline"})
 
 
 def collect_runs(benchmark_dir: Path) -> list[dict]:
-    """Walk <benchmark_dir>/eval-*/<variant>/run-*/grading.json and build the runs array.
-
-    Variant names are passed through to the dashboard as-is (no collapse / rename).
+    """Walk <benchmark_dir>/eval-*/{current,baseline}/run-*/grading.json
+    and build the runs array. The two-config layout is fixed — anything else
+    in the eval dir is skipped.
     """
-    allowed = _allowed_configs(benchmark_dir)
-
     runs: list[dict] = []
     for eval_dir in sorted(benchmark_dir.glob("eval-*")):
         try:
@@ -205,9 +186,9 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
             eval_name = meta.get("eval_name") or meta.get("name") or ""
 
         for config_dir in sorted(p for p in eval_dir.iterdir() if p.is_dir()):
-            if config_dir.name not in allowed:
+            if config_dir.name not in _ALLOWED_CONFIGS:
                 continue
-            variant = config_dir.name
+            config = config_dir.name
 
             for run_dir in sorted(config_dir.glob("run-*")):
                 try:
@@ -218,7 +199,7 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
                 runs.append({
                     "eval_id": eval_id,
                     "eval_name": eval_name,
-                    "configuration": variant,
+                    "configuration": config,
                     "run_number": run_number,
                     "grading": _read_json(run_dir / "grading.json"),
                 })
@@ -227,7 +208,7 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
 
 def _read_evals_definition(skill_path: Path) -> Optional[dict]:
     """Read evals.json for upload as iteration snapshot. Lets the dashboard
-    render the actual case prompts and variant declarations alongside results.
+    render the actual case prompts alongside results.
 
     Goes through the pydantic loader so the upload payload is the schema's
     canonical shape — never raw user fields outside the declared schema.

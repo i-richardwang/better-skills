@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
-"""
-Aggregate per-run grading.json files into benchmark summary statistics.
+"""Aggregate per-run grading.json files into benchmark summary statistics.
 
-Reads `<iteration-dir>/manifest.json` to learn which variants exist (the
-manifest is authoritative — there is no glob fallback) and which is the
-primary / baseline (drives delta direction). Outputs benchmark.json + .md.
+Reads `<iteration-dir>/manifest.json` for skill metadata, baseline_resolved,
+and replicate counts. Every iteration runs exactly two configs — `current`
+and `baseline` — so aggregation is a fixed two-group operation.
+
+delta = current - baseline.
 
 Usage:
-    python aggregate_benchmark.py <iteration-dir>
-
-Directory layout expected:
-    <iteration-dir>/
-    ├── manifest.json           (required — written by run_functional_eval)
-    └── eval-N/
-        └── <variant-name>/
-            ├── run-1/grading.json
-            └── run-2/grading.json
+    python -m scripts.aggregate_benchmark <iteration-dir>
 """
 
 import argparse
@@ -27,11 +20,12 @@ from pathlib import Path
 
 
 MANIFEST_FILE = "manifest.json"
+CONFIG_CURRENT = "current"
+CONFIG_BASELINE = "baseline"
 
 
 def load_manifest(iteration_dir: Path) -> dict:
-    """Read iteration-N/manifest.json — the authoritative handoff from
-    run_functional_eval. Raises if missing or unreadable."""
+    """Read iteration-N/manifest.json. Raises if missing or unreadable."""
     path = iteration_dir / MANIFEST_FILE
     if not path.exists():
         raise FileNotFoundError(
@@ -62,29 +56,28 @@ def calculate_stats(values: list[float]) -> dict:
         "mean": round(mean, 4),
         "stddev": round(stddev, 4),
         "min": round(min(values), 4),
-        "max": round(max(values), 4)
+        "max": round(max(values), 4),
     }
 
 
-def load_run_results(benchmark_dir: Path, allowed_configs: set[str]) -> dict:
-    """
-    Load per-run grading.json files for the variants declared in the manifest.
+def load_run_results(benchmark_dir: Path) -> dict:
+    """Load per-run grading.json files for the two fixed configs.
 
-    `allowed_configs` (the manifest's `configs` list) gates which directories
-    count as variants — anything else (failed-runs/, stray dirs) is ignored.
+    Returns a dict {config_name: [run_result, ...]} where config_name is
+    always one of "current" or "baseline".
     """
     if not list(benchmark_dir.glob("eval-*")):
         print(f"No eval directories found in {benchmark_dir}")
         return {}
 
-    results: dict[str, list] = {}
+    allowed_configs = {CONFIG_CURRENT, CONFIG_BASELINE}
+    results: dict[str, list] = {CONFIG_CURRENT: [], CONFIG_BASELINE: []}
 
     for eval_idx, eval_dir in enumerate(sorted(benchmark_dir.glob("eval-*"))):
         metadata_path = eval_dir / "eval_metadata.json"
         if metadata_path.exists():
             try:
-                with open(metadata_path) as mf:
-                    eval_id = json.load(mf).get("eval_id", eval_idx)
+                eval_id = json.loads(metadata_path.read_text()).get("eval_id", eval_idx)
             except (json.JSONDecodeError, OSError):
                 eval_id = eval_idx
         else:
@@ -93,18 +86,12 @@ def load_run_results(benchmark_dir: Path, allowed_configs: set[str]) -> dict:
             except ValueError:
                 eval_id = eval_idx
 
-        # Discover config directories dynamically rather than hardcoding names
         for config_dir in sorted(eval_dir.iterdir()):
-            if not config_dir.is_dir():
-                continue
-            # Skip non-config directories (inputs, outputs, etc.)
-            if not list(config_dir.glob("run-*")):
+            if not config_dir.is_dir() or config_dir.name not in allowed_configs:
                 continue
             config = config_dir.name
-            if config not in allowed_configs:
+            if not list(config_dir.glob("run-*")):
                 continue
-            if config not in results:
-                results[config] = []
 
             for run_dir in sorted(config_dir.glob("run-*")):
                 run_number = int(run_dir.name.split("-")[1])
@@ -115,50 +102,44 @@ def load_run_results(benchmark_dir: Path, allowed_configs: set[str]) -> dict:
                     continue
 
                 try:
-                    with open(grading_file) as f:
-                        grading = json.load(f)
+                    grading = json.loads(grading_file.read_text())
                 except json.JSONDecodeError as e:
                     print(f"Warning: Invalid JSON in {grading_file}: {e}")
                     continue
 
-                # Extract metrics
+                summary = grading.get("summary", {})
                 result = {
                     "eval_id": eval_id,
                     "run_number": run_number,
-                    "pass_rate": grading.get("summary", {}).get("pass_rate", 0.0),
-                    "passed": grading.get("summary", {}).get("passed", 0),
-                    "failed": grading.get("summary", {}).get("failed", 0),
-                    "total": grading.get("summary", {}).get("total", 0),
+                    "pass_rate": summary.get("pass_rate", 0.0),
+                    "passed": summary.get("passed", 0),
+                    "failed": summary.get("failed", 0),
+                    "total": summary.get("total", 0),
                 }
 
-                # Extract timing — check grading.json first, then sibling timing.json
                 timing = grading.get("timing", {})
                 result["time_seconds"] = timing.get("total_duration_seconds", 0.0)
                 timing_file = run_dir / "timing.json"
                 if result["time_seconds"] == 0.0 and timing_file.exists():
                     try:
-                        with open(timing_file) as tf:
-                            timing_data = json.load(tf)
+                        timing_data = json.loads(timing_file.read_text())
                         result["time_seconds"] = timing_data.get("total_duration_seconds", 0.0)
                         result["tokens"] = timing_data.get("total_tokens", 0)
                     except json.JSONDecodeError:
                         pass
 
-                # Extract metrics if available
                 metrics = grading.get("execution_metrics", {})
                 result["tool_calls"] = metrics.get("total_tool_calls", 0)
                 if not result.get("tokens"):
                     result["tokens"] = metrics.get("output_chars", 0)
                 result["errors"] = metrics.get("errors_encountered", 0)
 
-                # Extract expectations — viewer requires fields: text, passed, evidence
                 raw_expectations = grading.get("expectations", [])
                 for exp in raw_expectations:
                     if "text" not in exp or "passed" not in exp:
                         print(f"Warning: expectation in {grading_file} missing required fields (text, passed, evidence): {exp}")
                 result["expectations"] = raw_expectations
 
-                # Extract notes from user_notes_summary
                 notes_summary = grading.get("user_notes_summary", {})
                 notes = []
                 notes.extend(notes_summary.get("uncertainties", []))
@@ -171,103 +152,58 @@ def load_run_results(benchmark_dir: Path, allowed_configs: set[str]) -> dict:
     return results
 
 
-def _order_configs(
-    configs: list[str],
-    primary: str | None,
-    baseline: str | None,
-) -> list[str]:
-    """Put primary first, baseline second, then everything else (in original order).
-    This pins the delta sign: delta = primary - baseline. Primary/baseline come
-    from the manifest (which got them from evals.json defaults), not a hardcoded list.
+def aggregate_results(results: dict) -> dict:
+    """Aggregate run results into summary statistics for current and baseline.
+
+    delta is always current - baseline (the natural reading of "did the
+    current skill help"). Empty groups produce zeroed stats so the output
+    shape is always the same.
     """
-    head = [c for c in (primary, baseline) if c and c in configs]
-    rest = [c for c in configs if c not in head]
-    return head + rest
+    run_summary: dict = {}
 
-
-def aggregate_results(
-    results: dict,
-    primary_variant: str | None = None,
-    baseline_variant: str | None = None,
-) -> dict:
-    """
-    Aggregate run results into summary statistics.
-
-    `primary_variant` and `baseline_variant` (from manifest) decide which configs
-    are placed at indices 0 and 1, pinning the delta sign as primary - baseline.
-    """
-    run_summary = {}
-    configs = _order_configs(list(results.keys()), primary_variant, baseline_variant)
-
-    for config in configs:
-        runs = results.get(config, [])
-
+    for config in (CONFIG_CURRENT, CONFIG_BASELINE):
+        runs = results.get(config) or []
         if not runs:
             run_summary[config] = {
                 "pass_rate": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
                 "time_seconds": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
-                "tokens": {"mean": 0, "stddev": 0, "min": 0, "max": 0}
+                "tokens": {"mean": 0, "stddev": 0, "min": 0, "max": 0},
             }
             continue
 
-        pass_rates = [r["pass_rate"] for r in runs]
-        times = [r["time_seconds"] for r in runs]
-        tokens = [r.get("tokens", 0) for r in runs]
-
         run_summary[config] = {
-            "pass_rate": calculate_stats(pass_rates),
-            "time_seconds": calculate_stats(times),
-            "tokens": calculate_stats(tokens)
+            "pass_rate": calculate_stats([r["pass_rate"] for r in runs]),
+            "time_seconds": calculate_stats([r["time_seconds"] for r in runs]),
+            "tokens": calculate_stats([r.get("tokens", 0) for r in runs]),
         }
 
-    # delta = primary - baseline (configs[0] - configs[1] after reorder)
-    if len(configs) >= 2:
-        primary = run_summary.get(configs[0], {})
-        baseline = run_summary.get(configs[1], {})
-    else:
-        primary = run_summary.get(configs[0], {}) if configs else {}
-        baseline = {}
-
-    delta_pass_rate = primary.get("pass_rate", {}).get("mean", 0) - baseline.get("pass_rate", {}).get("mean", 0)
-    delta_time = primary.get("time_seconds", {}).get("mean", 0) - baseline.get("time_seconds", {}).get("mean", 0)
-    delta_tokens = primary.get("tokens", {}).get("mean", 0) - baseline.get("tokens", {}).get("mean", 0)
-
+    cur = run_summary[CONFIG_CURRENT]
+    base = run_summary[CONFIG_BASELINE]
     run_summary["delta"] = {
-        "pass_rate": f"{delta_pass_rate:+.2f}",
-        "time_seconds": f"{delta_time:+.1f}",
-        "tokens": f"{delta_tokens:+.0f}"
+        "pass_rate": f"{cur['pass_rate']['mean'] - base['pass_rate']['mean']:+.2f}",
+        "time_seconds": f"{cur['time_seconds']['mean'] - base['time_seconds']['mean']:+.1f}",
+        "tokens": f"{cur['tokens']['mean'] - base['tokens']['mean']:+.0f}",
     }
-
     return run_summary
 
 
 def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: str = "") -> dict:
-    """
-    Generate complete benchmark.json from run results.
+    """Generate complete benchmark.json from run results.
 
-    Reads `<benchmark_dir>/manifest.json` for variant names, primary/baseline
-    declarations, skill metadata, and replicate counts. Manifest is required —
-    if absent, raises FileNotFoundError.
+    The two-group shape is fixed: "current" and "baseline" plus a "delta" entry.
+    Manifest's `baseline_resolved` (e.g. "iteration-1", "none") is propagated
+    into metadata so consumers know what was actually compared against.
     """
     manifest = load_manifest(benchmark_dir)
     skill_name = skill_name or manifest.get("skill_name") or ""
     skill_path = skill_path or manifest.get("skill_path") or ""
-    configs = manifest.get("configs") or []
-    if not isinstance(configs, list) or not configs:
-        raise ValueError(
-            f"manifest.json at {benchmark_dir / MANIFEST_FILE} has no 'configs' list — "
-            f"cannot determine which variants to aggregate"
-        )
-    allowed_configs = set(configs)
-    primary_variant = manifest.get("primary_variant")
-    baseline_variant = manifest.get("baseline_variant")
-    results = load_run_results(benchmark_dir, allowed_configs=allowed_configs)
-    run_summary = aggregate_results(results, primary_variant, baseline_variant)
 
-    # Build runs array for benchmark.json
+    results = load_run_results(benchmark_dir)
+    run_summary = aggregate_results(results)
+
     runs = []
-    for config in results:
-        for result in results[config]:
+    for config in (CONFIG_CURRENT, CONFIG_BASELINE):
+        for result in results.get(config, []):
             runs.append({
                 "eval_id": result["eval_id"],
                 "configuration": config,
@@ -280,21 +216,18 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
                     "time_seconds": result["time_seconds"],
                     "tokens": result.get("tokens", 0),
                     "tool_calls": result.get("tool_calls", 0),
-                    "errors": result.get("errors", 0)
+                    "errors": result.get("errors", 0),
                 },
                 "expectations": result["expectations"],
-                "notes": result["notes"]
+                "notes": result["notes"],
             })
 
-    # Determine eval IDs from results
     eval_ids = sorted(set(
         r["eval_id"]
-        for config in results.values()
-        for r in config
+        for config_results in results.values()
+        for r in config_results
     ))
 
-    # Replicate count comes from the manifest (the planning source of truth, so
-    # missing runs don't shrink the count). Falls back to disk-observed max.
     replicates = [
         r.get("replicate", 0) for r in manifest.get("runs", [])
         if isinstance(r, dict)
@@ -303,8 +236,8 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
     if not runs_per_config:
         all_run_numbers = [
             r["run_number"]
-            for config in results.values()
-            for r in config
+            for config_results in results.values()
+            for r in config_results
         ]
         runs_per_config = max(all_run_numbers) if all_run_numbers else 0
 
@@ -319,13 +252,12 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "evals_run": eval_ids,
             "runs_per_configuration": runs_per_config,
-            "variants": configs,
-            "primary_variant": primary_variant,
-            "baseline_variant": baseline_variant,
+            "baseline_spec": manifest.get("baseline_spec"),
+            "baseline_resolved": manifest.get("baseline_resolved"),
         },
         "runs": runs,
         "run_summary": run_summary,
-        "notes": []  # To be filled by analyzer
+        "notes": [],
     }
 
     return benchmark
@@ -335,54 +267,52 @@ def generate_markdown(benchmark: dict) -> str:
     """Generate human-readable benchmark.md from benchmark data."""
     metadata = benchmark["metadata"]
     run_summary = benchmark["run_summary"]
-
-    # Determine config names (excluding "delta"). Order is set by aggregate_results
-    # so configs[0] is the primary, configs[1] is the baseline.
-    configs = [k for k in run_summary if k != "delta"]
-    config_a = configs[0] if len(configs) >= 1 else "config_a"
-    config_b = configs[1] if len(configs) >= 2 else "config_b"
-    label_a = config_a.replace("_", " ").title()
-    label_b = config_b.replace("_", " ").title()
+    baseline_resolved = metadata.get("baseline_resolved") or "?"
 
     lines = [
         f"# Skill Benchmark: {metadata['skill_name']}",
         "",
         f"**Model**: {metadata['executor_model']}",
         f"**Date**: {metadata['timestamp']}",
+        f"**Baseline**: {baseline_resolved}",
         f"**Evals**: {', '.join(map(str, metadata['evals_run']))} ({metadata['runs_per_configuration']} run{'s' if metadata['runs_per_configuration'] != 1 else ''} each per configuration)",
         "",
         "## Summary",
         "",
-        f"| Metric | {label_a} | {label_b} | Delta |",
-        "|--------|------------|---------------|-------|",
+        "| Metric | Current | Baseline | Delta |",
+        "|--------|---------|----------|-------|",
     ]
 
-    a_summary = run_summary.get(config_a, {})
-    b_summary = run_summary.get(config_b, {})
+    cur = run_summary.get(CONFIG_CURRENT, {})
+    base = run_summary.get(CONFIG_BASELINE, {})
     delta = run_summary.get("delta", {})
 
-    # Format pass rate
-    a_pr = a_summary.get("pass_rate", {})
-    b_pr = b_summary.get("pass_rate", {})
-    lines.append(f"| Pass Rate | {a_pr.get('mean', 0)*100:.0f}% ± {a_pr.get('stddev', 0)*100:.0f}% | {b_pr.get('mean', 0)*100:.0f}% ± {b_pr.get('stddev', 0)*100:.0f}% | {delta.get('pass_rate', '—')} |")
+    cur_pr = cur.get("pass_rate", {})
+    base_pr = base.get("pass_rate", {})
+    lines.append(
+        f"| Pass Rate | {cur_pr.get('mean', 0)*100:.0f}% ± {cur_pr.get('stddev', 0)*100:.0f}% | "
+        f"{base_pr.get('mean', 0)*100:.0f}% ± {base_pr.get('stddev', 0)*100:.0f}% | "
+        f"{delta.get('pass_rate', '—')} |"
+    )
 
-    # Format time
-    a_time = a_summary.get("time_seconds", {})
-    b_time = b_summary.get("time_seconds", {})
-    lines.append(f"| Time | {a_time.get('mean', 0):.1f}s ± {a_time.get('stddev', 0):.1f}s | {b_time.get('mean', 0):.1f}s ± {b_time.get('stddev', 0):.1f}s | {delta.get('time_seconds', '—')}s |")
+    cur_t = cur.get("time_seconds", {})
+    base_t = base.get("time_seconds", {})
+    lines.append(
+        f"| Time | {cur_t.get('mean', 0):.1f}s ± {cur_t.get('stddev', 0):.1f}s | "
+        f"{base_t.get('mean', 0):.1f}s ± {base_t.get('stddev', 0):.1f}s | "
+        f"{delta.get('time_seconds', '—')}s |"
+    )
 
-    # Format tokens
-    a_tokens = a_summary.get("tokens", {})
-    b_tokens = b_summary.get("tokens", {})
-    lines.append(f"| Tokens | {a_tokens.get('mean', 0):.0f} ± {a_tokens.get('stddev', 0):.0f} | {b_tokens.get('mean', 0):.0f} ± {b_tokens.get('stddev', 0):.0f} | {delta.get('tokens', '—')} |")
+    cur_tk = cur.get("tokens", {})
+    base_tk = base.get("tokens", {})
+    lines.append(
+        f"| Tokens | {cur_tk.get('mean', 0):.0f} ± {cur_tk.get('stddev', 0):.0f} | "
+        f"{base_tk.get('mean', 0):.0f} ± {base_tk.get('stddev', 0):.0f} | "
+        f"{delta.get('tokens', '—')} |"
+    )
 
-    # Notes section
     if benchmark.get("notes"):
-        lines.extend([
-            "",
-            "## Notes",
-            ""
-        ])
+        lines.extend(["", "## Notes", ""])
         for note in benchmark["notes"]:
             lines.append(f"- {note}")
 
@@ -390,29 +320,11 @@ def generate_markdown(benchmark: dict) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Aggregate benchmark run results into summary statistics"
-    )
-    parser.add_argument(
-        "benchmark_dir",
-        type=Path,
-        help="Path to the benchmark directory"
-    )
-    parser.add_argument(
-        "--skill-name",
-        default="",
-        help="Name of the skill being benchmarked"
-    )
-    parser.add_argument(
-        "--skill-path",
-        default="",
-        help="Path to the skill being benchmarked"
-    )
-    parser.add_argument(
-        "--output", "-o",
-        type=Path,
-        help="Output path for benchmark.json (default: <benchmark_dir>/benchmark.json)"
-    )
+    parser = argparse.ArgumentParser(description="Aggregate benchmark run results into summary statistics")
+    parser.add_argument("benchmark_dir", type=Path, help="Path to the benchmark directory")
+    parser.add_argument("--skill-name", default="", help="Name of the skill being benchmarked")
+    parser.add_argument("--skill-path", default="", help="Path to the skill being benchmarked")
+    parser.add_argument("--output", "-o", type=Path, help="Output path for benchmark.json (default: <benchmark_dir>/benchmark.json)")
 
     args = parser.parse_args()
 
@@ -420,26 +332,17 @@ def main():
         print(f"Directory not found: {args.benchmark_dir}")
         sys.exit(1)
 
-    # Generate benchmark
     benchmark = generate_benchmark(args.benchmark_dir, args.skill_name, args.skill_path)
 
-    # Determine output paths
     output_json = args.output or (args.benchmark_dir / "benchmark.json")
     output_md = output_json.with_suffix(".md")
 
-    # Write benchmark.json
-    with open(output_json, "w") as f:
-        json.dump(benchmark, f, indent=2)
+    output_json.write_text(json.dumps(benchmark, indent=2))
     print(f"Generated: {output_json}")
 
-    # Write benchmark.md
-    markdown = generate_markdown(benchmark)
-    with open(output_md, "w") as f:
-        f.write(markdown)
+    output_md.write_text(generate_markdown(benchmark))
     print(f"Generated: {output_md}")
 
-    # Fire-and-forget upload to the dashboard if configured via env vars.
-    # Fails soft — any error here never interrupts the main workflow.
     try:
         try:
             from .upload_dashboard import upload_from_env, infer_iteration_number
@@ -457,17 +360,14 @@ def main():
     except Exception as e:
         print(f"[dashboard] hook skipped: {e}", file=sys.stderr)
 
-    # Print summary
     run_summary = benchmark["run_summary"]
-    configs = [k for k in run_summary if k != "delta"]
+    cur = run_summary.get(CONFIG_CURRENT, {}).get("pass_rate", {}).get("mean", 0)
+    base = run_summary.get(CONFIG_BASELINE, {}).get("pass_rate", {}).get("mean", 0)
     delta = run_summary.get("delta", {})
-
     print(f"\nSummary:")
-    for config in configs:
-        pr = run_summary[config]["pass_rate"]["mean"]
-        label = config.replace("_", " ").title()
-        print(f"  {label}: {pr*100:.1f}% pass rate")
-    print(f"  Delta:         {delta.get('pass_rate', '—')}")
+    print(f"  Current:  {cur*100:.1f}% pass rate")
+    print(f"  Baseline: {base*100:.1f}% pass rate")
+    print(f"  Delta:    {delta.get('pass_rate', '—')}")
 
 
 if __name__ == "__main__":
