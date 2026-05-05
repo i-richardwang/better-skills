@@ -6,10 +6,10 @@ trends — across every skill that gets evaluated through the
 [`better-skills`](../skills/better-skills/) CLI.
 
 The CLI's `iterate` command writes a `manifest.json` + `benchmark.json` per
-iteration locally, then `upload_dashboard.py` POSTs the snapshot (skill
-files, raw benchmark, per-run records) to this dashboard's HTTP API. From
-there you can browse skills as a portfolio, drill into individual
-iterations, and watch metrics evolve over time.
+iteration locally, then POSTs the snapshot (skill files, raw benchmark,
+per-run records) to this dashboard's HTTP API. From there you can browse
+skills as a portfolio, drill into individual iterations, and watch metrics
+evolve over time.
 
 ## What you get
 
@@ -75,8 +75,8 @@ Create `.env.local` (or `.env`) with:
 DATABASE_URL=postgres://user:password@host:5432/dbname
 
 # Shared secret for POST /api/uploads — generate a long random value.
-# The CLI's upload_dashboard.py reads DASHBOARD_UPLOAD_TOKEN with the same
-# value and passes it as a Bearer header.
+# Set the same value as SKILL_DASHBOARD_TOKEN on the CLI host so the
+# uploader passes it as a Bearer header.
 DASHBOARD_UPLOAD_TOKEN=change-me-to-a-long-random-string
 ```
 

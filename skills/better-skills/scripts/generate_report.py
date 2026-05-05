@@ -6,11 +6,7 @@ showing each description attempt with check/x for each test case.
 Distinguishes between train and test queries.
 """
 
-import argparse
 import html
-import json
-import sys
-from pathlib import Path
 
 
 def generate_html(data: dict, auto_refresh: bool = False, skill_name: str = "") -> str:
@@ -301,26 +297,3 @@ def generate_html(data: dict, auto_refresh: bool = False, skill_name: str = "") 
     return "".join(html_parts)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate HTML report from run_loop output")
-    parser.add_argument("input", help="Path to JSON output from run_loop.py (or - for stdin)")
-    parser.add_argument("-o", "--output", default=None, help="Output HTML file (default: stdout)")
-    parser.add_argument("--skill-name", default="", help="Skill name to include in the report title")
-    args = parser.parse_args()
-
-    if args.input == "-":
-        data = json.load(sys.stdin)
-    else:
-        data = json.loads(Path(args.input).read_text())
-
-    html_output = generate_html(data, skill_name=args.skill_name)
-
-    if args.output:
-        Path(args.output).write_text(html_output)
-        print(f"Report written to {args.output}", file=sys.stderr)
-    else:
-        print(html_output)
-
-
-if __name__ == "__main__":
-    main()

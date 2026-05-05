@@ -1,9 +1,9 @@
 # Iteration manifest schema
 
-Each `iteration-N/` directory contains a `manifest.json` written by
-`run_functional_eval.run_all`. The manifest is the **authoritative** handoff
-between scripts in the pipeline — `aggregate_benchmark.py`,
-`upload_dashboard.py`, and any other downstream tool **require** it.
+Each `iteration-N/` directory contains a `manifest.json` written by the
+`better-skills run` step. The manifest is the **authoritative** handoff
+between pipeline stages — `better-skills aggregate` / `upload` and any
+other downstream tool **require** it.
 
 The on-disk run dirs remain the ultimate source of truth for per-run results;
 the manifest is the index that tells consumers what was tested, what

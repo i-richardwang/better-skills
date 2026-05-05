@@ -7,14 +7,11 @@ and `baseline` — so aggregation is a fixed two-group operation.
 
 delta = current - baseline.
 
-Usage:
-    python -m scripts.aggregate_benchmark <iteration-dir>
+Invoked via `better-skills aggregate <iteration-dir>`.
 """
 
-import argparse
 import json
 import math
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,7 +27,7 @@ def load_manifest(iteration_dir: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(
             f"manifest.json not found at {path}. Re-run "
-            f"`python -m scripts.cli run` to produce it."
+            f"`better-skills run` to produce it."
         )
     try:
         return json.loads(path.read_text())
@@ -321,56 +318,3 @@ def generate_markdown(benchmark: dict) -> str:
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Aggregate benchmark run results into summary statistics")
-    parser.add_argument("benchmark_dir", type=Path, help="Path to the benchmark directory")
-    parser.add_argument("--skill-name", default="", help="Name of the skill being benchmarked")
-    parser.add_argument("--skill-path", default="", help="Path to the skill being benchmarked")
-    parser.add_argument("--output", "-o", type=Path, help="Output path for benchmark.json (default: <benchmark_dir>/benchmark.json)")
-
-    args = parser.parse_args()
-
-    if not args.benchmark_dir.exists():
-        print(f"Directory not found: {args.benchmark_dir}")
-        sys.exit(1)
-
-    benchmark = generate_benchmark(args.benchmark_dir, args.skill_name, args.skill_path)
-
-    output_json = args.output or (args.benchmark_dir / "benchmark.json")
-    output_md = output_json.with_suffix(".md")
-
-    output_json.write_text(json.dumps(benchmark, indent=2))
-    print(f"Generated: {output_json}")
-
-    output_md.write_text(generate_markdown(benchmark))
-    print(f"Generated: {output_md}")
-
-    try:
-        try:
-            from .upload_dashboard import upload_from_env, infer_iteration_number
-        except ImportError:
-            from upload_dashboard import upload_from_env, infer_iteration_number
-        iteration_n = infer_iteration_number(args.benchmark_dir)
-        if iteration_n is not None and args.skill_name:
-            skill_path = Path(args.skill_path) if args.skill_path else None
-            upload_from_env(
-                benchmark_dir=args.benchmark_dir,
-                skill_name=args.skill_name,
-                iteration_number=iteration_n,
-                skill_path=skill_path,
-            )
-    except Exception as e:
-        print(f"[dashboard] hook skipped: {e}", file=sys.stderr)
-
-    run_summary = benchmark["run_summary"]
-    cur = run_summary.get(CONFIG_CURRENT, {}).get("pass_rate", {}).get("mean", 0)
-    base = run_summary.get(CONFIG_BASELINE, {}).get("pass_rate", {}).get("mean", 0)
-    delta = run_summary.get("delta", {})
-    print(f"\nSummary:")
-    print(f"  Current:  {cur*100:.1f}% pass rate")
-    print(f"  Baseline: {base*100:.1f}% pass rate")
-    print(f"  Delta:    {delta.get('pass_rate', '—')}")
-
-
-if __name__ == "__main__":
-    main()

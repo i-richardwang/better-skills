@@ -14,7 +14,7 @@ At a high level, the process of creating a skill goes like this:
 - Create a few test prompts and run `iterate` on them
 - Help the user evaluate the results both qualitatively and quantitatively
   - While the runs happen in the background, draft some quantitative evals if there aren't any (if there are some, you can either use as is or modify if you feel something needs to change about them). Then explain them to the user (or if they already existed, explain the ones that already exist)
-  - Use the `eval-viewer/generate_review.py` script to show the user the results for them to look at, and also let them look at the quantitative metrics
+  - Use `better-skills view <iteration-dir>` to show the user the results for them to look at, and also let them look at the quantitative metrics
 - Rewrite the skill based on feedback from the user's evaluation of the results (and also if there are any glaring flaws that become apparent from the quantitative benchmarks)
 - Repeat until you're satisfied
 - Expand the test set and try again at larger scale
@@ -290,7 +290,7 @@ After `iterate` finishes:
 
    **Cowork / headless environments:** Use `--no-view` and instead invoke the viewer manually with `--static <output_path>` to write a standalone HTML file. Feedback will be downloaded as a `feedback.json` file when the user clicks "Submit All Reviews". After download, copy `feedback.json` into the workspace directory for the next iteration to pick up.
 
-   Note: please use generate_review.py to create the viewer; there's no need to write custom HTML.
+   Note: please use `better-skills view` to launch the viewer; there's no need to write custom HTML.
 
 ### What the user sees in the viewer
 
@@ -487,7 +487,7 @@ In Claude.ai (and any environment where you can't spawn an executor CLI), the co
 
 **Description optimization and blind comparison**: Both require subprocess execution. Skip them in this environment.
 
-**Packaging**: The `package_skill.py` script works anywhere with Python and a filesystem. On Claude.ai, you can run it and the user can download the resulting `.skill` file.
+**Packaging**: `better-skills package <skill-path>` works anywhere with Python and a filesystem. On Claude.ai, you can run it and the user can download the resulting `.skill` file.
 
 **Updating an existing skill**: The user might be asking you to update an existing skill, not create a new one. In this case:
 - **Preserve the original name.** Note the skill's directory name and `name` frontmatter field -- use them unchanged. E.g., if the installed skill is `research-helper`, output `research-helper.skill` (not `research-helper-v2`).
@@ -502,10 +502,10 @@ If you're in Cowork, the main things to know are:
 
 - You have an executor CLI (`claude` or `opencode`), so the main workflow (launch test cases in parallel, run baselines, grade, etc.) all works. (However, if you run into severe problems with timeouts, it's OK to run the test prompts in series rather than parallel.)
 - You don't have a browser or display, so when generating the eval viewer, use `--static <output_path>` to write a standalone HTML file instead of starting a server. Then proffer a link that the user can click to open the HTML in their browser.
-- For whatever reason, the Cowork setup seems to disincline Claude from generating the eval viewer after running the tests, so just to reiterate: whether you're in Cowork or in Claude Code, after running tests, you should always generate the eval viewer for the human to look at examples before revising the skill yourself and trying to make corrections, using `generate_review.py` (not writing your own boutique html code). Sorry in advance but I'm gonna go all caps here: GENERATE THE EVAL VIEWER *BEFORE* evaluating inputs yourself. You want to get them in front of the human ASAP!
+- For whatever reason, the Cowork setup seems to disincline Claude from generating the eval viewer after running the tests, so just to reiterate: whether you're in Cowork or in Claude Code, after running tests, you should always generate the eval viewer for the human to look at examples before revising the skill yourself and trying to make corrections, using `better-skills view <iteration-dir>` (not writing your own boutique html code). Sorry in advance but I'm gonna go all caps here: GENERATE THE EVAL VIEWER *BEFORE* evaluating inputs yourself. You want to get them in front of the human ASAP!
 - Feedback works differently: since there's no running server, the viewer's "Submit All Reviews" button will download `feedback.json` as a file. You can then read it from there (you may have to request access first).
-- Packaging works — `package_skill.py` just needs Python and a filesystem.
-- Description optimization (`run_loop.py` / `run_eval.py`) should work in Cowork just fine since it runs subprocesses, not a browser, but please save it until you've fully finished making the skill and the user agrees it's in good shape.
+- Packaging works — `better-skills package <skill-path>` just needs Python and a filesystem.
+- Description optimization (`better-skills trigger-loop` / `trigger-eval`) should work in Cowork just fine since it runs subprocesses, not a browser, but please save it until you've fully finished making the skill and the user agrees it's in good shape.
 - **Updating an existing skill**: The user might be asking you to update an existing skill, not create a new one. Follow the update guidance in the claude.ai section above.
 
 ---
@@ -531,11 +531,11 @@ Repeating one more time the core loop here for emphasis:
 - Draft or edit the skill
 - Run `iterate` on the test prompts
 - With the user, evaluate the outputs:
-  - Create benchmark.json and run `eval-viewer/generate_review.py` to help the user review them
+  - Create benchmark.json and run `better-skills view <iteration-dir>` to help the user review them
   - Run quantitative evals
 - Repeat until you and the user are satisfied
 - Package the final skill and return it to the user.
 
-Please add steps to your TodoList, if you have such a thing, to make sure you don't forget. If you're in Cowork, please specifically put "Create evals JSON and run `eval-viewer/generate_review.py` so human can review test cases" in your TodoList to make sure it happens.
+Please add steps to your TodoList, if you have such a thing, to make sure you don't forget. If you're in Cowork, please specifically put "Create evals JSON and run `better-skills view <iteration-dir>` so human can review test cases" in your TodoList to make sure it happens.
 
 Good luck!

@@ -228,7 +228,7 @@ def cmd_package(args: argparse.Namespace) -> dict:
     result = package_skill.package_skill(str(args.skill_path), args.output_dir)
     if not result:
         raise SystemExit(1)
-    return {"status": "ok", "skill_file": result}
+    return {"status": "ok", "skill_file": str(result)}
 
 
 # --- upload -----------------------------------------------------------------

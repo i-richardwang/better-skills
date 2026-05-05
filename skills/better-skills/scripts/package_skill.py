@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """
-Skill Packager - Creates a distributable .skill file of a skill folder
+Skill Packager - Creates a distributable .skill file of a skill folder.
 
-Usage:
-    python utils/package_skill.py <path/to/skill-folder> [output-directory]
-
-Example:
-    python utils/package_skill.py skills/public/my-skill
-    python utils/package_skill.py skills/public/my-skill ./dist
+Invoked via the `better-skills package <skill-path> [--output-dir DIR]` CLI.
+Progress lines go to stderr so the CLI wrapper can keep stdout reserved for
+its structured JSON result.
 """
 
 import fnmatch
@@ -15,6 +12,10 @@ import sys
 import zipfile
 from pathlib import Path
 from .quick_validate import validate_skill
+
+
+def _log(msg: str) -> None:
+    print(msg, file=sys.stderr)
 
 # Patterns to exclude when packaging skills.
 EXCLUDE_DIRS = {"__pycache__", "node_modules"}
@@ -54,27 +55,27 @@ def package_skill(skill_path, output_dir=None):
 
     # Validate skill folder exists
     if not skill_path.exists():
-        print(f"❌ Error: Skill folder not found: {skill_path}")
+        _log(f"❌ Error: Skill folder not found: {skill_path}")
         return None
 
     if not skill_path.is_dir():
-        print(f"❌ Error: Path is not a directory: {skill_path}")
+        _log(f"❌ Error: Path is not a directory: {skill_path}")
         return None
 
     # Validate SKILL.md exists
     skill_md = skill_path / "SKILL.md"
     if not skill_md.exists():
-        print(f"❌ Error: SKILL.md not found in {skill_path}")
+        _log(f"❌ Error: SKILL.md not found in {skill_path}")
         return None
 
     # Run validation before packaging
-    print("🔍 Validating skill...")
+    _log("🔍 Validating skill...")
     valid, message = validate_skill(skill_path)
     if not valid:
-        print(f"❌ Validation failed: {message}")
-        print("   Please fix the validation errors before packaging.")
+        _log(f"❌ Validation failed: {message}")
+        _log("   Please fix the validation errors before packaging.")
         return None
-    print(f"✅ {message}\n")
+    _log(f"✅ {message}\n")
 
     # Determine output location
     skill_name = skill_path.name
@@ -95,42 +96,16 @@ def package_skill(skill_path, output_dir=None):
                     continue
                 arcname = file_path.relative_to(skill_path.parent)
                 if should_exclude(arcname):
-                    print(f"  Skipped: {arcname}")
+                    _log(f"  Skipped: {arcname}")
                     continue
                 zipf.write(file_path, arcname)
-                print(f"  Added: {arcname}")
+                _log(f"  Added: {arcname}")
 
-        print(f"\n✅ Successfully packaged skill to: {skill_filename}")
+        _log(f"\n✅ Successfully packaged skill to: {skill_filename}")
         return skill_filename
 
     except Exception as e:
-        print(f"❌ Error creating .skill file: {e}")
+        _log(f"❌ Error creating .skill file: {e}")
         return None
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python utils/package_skill.py <path/to/skill-folder> [output-directory]")
-        print("\nExample:")
-        print("  python utils/package_skill.py skills/public/my-skill")
-        print("  python utils/package_skill.py skills/public/my-skill ./dist")
-        sys.exit(1)
-
-    skill_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else None
-
-    print(f"📦 Packaging skill: {skill_path}")
-    if output_dir:
-        print(f"   Output directory: {output_dir}")
-    print()
-
-    result = package_skill(skill_path, output_dir)
-
-    if result:
-        sys.exit(0)
-    else:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

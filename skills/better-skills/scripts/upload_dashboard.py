@@ -8,16 +8,14 @@ Can be invoked two ways:
    which reads `SKILL_DASHBOARD_URL` / `SKILL_DASHBOARD_TOKEN` from the environment
    and fails soft on any error (never raises, never blocks the main workflow).
 
-2. Standalone CLI — explicit upload of an already-aggregated benchmark directory:
-
-       python -m scripts.upload_dashboard <iteration-dir> \\
-         --skill-name my-skill --iteration 3 --skill-path path/to/skill
+2. Manual CLI — explicit upload of an already-aggregated benchmark directory
+   via `better-skills upload <iteration-dir> --skill-name my-skill
+   --iteration 3 --skill-path path/to/skill`.
 
 The payload shape matches the `POST /api/uploads` contract:
 benchmark.json + per-run grading.json + optional SKILL.md snapshot + git SHA + hostname.
 """
 
-import argparse
 import json
 import os
 import socket
@@ -334,40 +332,3 @@ def infer_iteration_number(benchmark_dir: Path) -> Optional[int]:
     return None
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Upload a benchmark iteration to the dashboard")
-    parser.add_argument("benchmark_dir", type=Path, help="Path to iteration-N directory")
-    parser.add_argument("--skill-name", required=True)
-    parser.add_argument("--iteration", type=int, default=None,
-                        help="Iteration number (default: inferred from benchmark_dir name)")
-    parser.add_argument("--skill-path", type=Path, default=None,
-                        help="Path to the skill directory (for SKILL.md snapshot + git SHA)")
-    parser.add_argument("--dashboard-url", default=os.environ.get("SKILL_DASHBOARD_URL"))
-    parser.add_argument("--token", default=os.environ.get("SKILL_DASHBOARD_TOKEN"))
-    args = parser.parse_args()
-
-    if not args.dashboard_url or not args.token:
-        print("Missing --dashboard-url / --token (or SKILL_DASHBOARD_URL / SKILL_DASHBOARD_TOKEN env)",
-              file=sys.stderr)
-        sys.exit(2)
-
-    iteration_number = args.iteration
-    if iteration_number is None:
-        iteration_number = infer_iteration_number(args.benchmark_dir)
-    if iteration_number is None:
-        print(f"Cannot infer iteration number from {args.benchmark_dir.name}; pass --iteration N",
-              file=sys.stderr)
-        sys.exit(2)
-
-    payload = build_payload(
-        args.benchmark_dir,
-        args.skill_name,
-        iteration_number,
-        args.skill_path,
-    )
-    result = upload(args.dashboard_url, args.token, payload)
-    print(json.dumps(result, indent=2))
-
-
-if __name__ == "__main__":
-    main()
