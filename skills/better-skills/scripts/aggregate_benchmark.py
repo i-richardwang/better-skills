@@ -107,7 +107,7 @@ def load_run_results(benchmark_dir: Path) -> dict:
                     print(f"Warning: Invalid JSON in {grading_file}: {e}")
                     continue
 
-                summary = grading.get("summary", {})
+                summary = grading.get("summary") or {}
                 result = {
                     "eval_id": eval_id,
                     "run_number": run_number,
@@ -117,30 +117,32 @@ def load_run_results(benchmark_dir: Path) -> dict:
                     "total": summary.get("total", 0),
                 }
 
-                timing = grading.get("timing", {})
+                # timing.json is the source of truth for total_tokens — grading.timing
+                # only carries durations, not token counts.
+                timing = grading.get("timing") or {}
                 result["time_seconds"] = timing.get("total_duration_seconds", 0.0)
+                result["tokens"] = 0
                 timing_file = run_dir / "timing.json"
-                if result["time_seconds"] == 0.0 and timing_file.exists():
+                if timing_file.exists():
                     try:
                         timing_data = json.loads(timing_file.read_text())
-                        result["time_seconds"] = timing_data.get("total_duration_seconds", 0.0)
+                        if not result["time_seconds"]:
+                            result["time_seconds"] = timing_data.get("total_duration_seconds", 0.0)
                         result["tokens"] = timing_data.get("total_tokens", 0)
                     except json.JSONDecodeError:
                         pass
 
-                metrics = grading.get("execution_metrics", {})
+                metrics = grading.get("execution_metrics") or {}
                 result["tool_calls"] = metrics.get("total_tool_calls", 0)
-                if not result.get("tokens"):
-                    result["tokens"] = metrics.get("output_chars", 0)
                 result["errors"] = metrics.get("errors_encountered", 0)
 
-                raw_expectations = grading.get("expectations", [])
+                raw_expectations = grading.get("expectations") or []
                 for exp in raw_expectations:
                     if "text" not in exp or "passed" not in exp:
                         print(f"Warning: expectation in {grading_file} missing required fields (text, passed, evidence): {exp}")
                 result["expectations"] = raw_expectations
 
-                notes_summary = grading.get("user_notes_summary", {})
+                notes_summary = grading.get("user_notes_summary") or {}
                 notes = []
                 notes.extend(notes_summary.get("uncertainties", []))
                 notes.extend(notes_summary.get("needs_review", []))
