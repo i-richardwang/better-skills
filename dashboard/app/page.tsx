@@ -125,7 +125,7 @@ function SkillCard({
               {fmtPct(skill.latestPassRate, 1)}
             </span>
             <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
-              with-skill pass rate
+              current pass rate
             </span>
           </div>
         </CardContent>

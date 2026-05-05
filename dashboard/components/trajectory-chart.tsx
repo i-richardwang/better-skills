@@ -13,9 +13,9 @@ import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
 
 export type TrajectoryDatum = {
   iteration: number;
-  primary: number | null;
-  primaryBandLow: number | null;
-  primaryBandHigh: number | null;
+  current: number | null;
+  currentBandLow: number | null;
+  currentBandHigh: number | null;
   baseline: number | null;
   baselineBandLow: number | null;
   baselineBandHigh: number | null;
@@ -23,22 +23,23 @@ export type TrajectoryDatum = {
 
 type Props = {
   data: TrajectoryDatum[];
-  // Display labels — actual variant names from evals.json. Defaults are kept
-  // for the rare case where a caller doesn't know the variants.
-  primaryLabel?: string;
+  // Display labels — defaults match the runner's fixed config names. Caller
+  // can override `baselineLabel` to e.g. "baseline (iteration-1)" to surface
+  // what the baseline actually pointed to.
+  currentLabel?: string;
   baselineLabel?: string;
 };
 
-const C_PRIMARY = "oklch(0.62 0.14 150)";
+const C_CURRENT = "oklch(0.62 0.14 150)";
 const C_BASELINE = "oklch(0.60 0.11 55)";
 
 export function TrajectoryChart({
   data,
-  primaryLabel = "primary",
+  currentLabel = "current",
   baselineLabel = "baseline",
 }: Props) {
   const chartConfig = {
-    primary: { label: primaryLabel, color: C_PRIMARY },
+    current: { label: currentLabel, color: C_CURRENT },
     baseline: { label: baselineLabel, color: C_BASELINE },
   } satisfies ChartConfig;
 
@@ -49,9 +50,9 @@ export function TrajectoryChart({
         margin={{ top: 16, right: 16, bottom: 8, left: -8 }}
       >
           <defs>
-            <linearGradient id="band-primary" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={C_PRIMARY} stopOpacity={0.18} />
-              <stop offset="100%" stopColor={C_PRIMARY} stopOpacity={0.04} />
+            <linearGradient id="band-current" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C_CURRENT} stopOpacity={0.18} />
+              <stop offset="100%" stopColor={C_CURRENT} stopOpacity={0.04} />
             </linearGradient>
             <linearGradient id="band-baseline" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={C_BASELINE} stopOpacity={0.18} />
@@ -85,19 +86,19 @@ export function TrajectoryChart({
             axisLine={false}
             width={44}
           />
-          <Tooltip content={<ChartTooltip primaryLabel={primaryLabel} baselineLabel={baselineLabel} />} cursor={{ stroke: "var(--border)" }} />
+          <Tooltip content={<ChartTooltip currentLabel={currentLabel} baselineLabel={baselineLabel} />} cursor={{ stroke: "var(--border)" }} />
 
           <Area
             type="monotone"
-            dataKey="primaryBandHigh"
+            dataKey="currentBandHigh"
             stroke="none"
-            fill="url(#band-primary)"
+            fill="url(#band-current)"
             activeDot={false}
             isAnimationActive={false}
           />
           <Area
             type="monotone"
-            dataKey="primaryBandLow"
+            dataKey="currentBandLow"
             stroke="none"
             fill="var(--background)"
             activeDot={false}
@@ -133,12 +134,12 @@ export function TrajectoryChart({
             connectNulls
           />
           <Line
-            name={primaryLabel}
+            name={currentLabel}
             type="monotone"
-            dataKey="primary"
-            stroke={C_PRIMARY}
+            dataKey="current"
+            stroke={C_CURRENT}
             strokeWidth={2}
-            dot={{ r: 3.5, fill: C_PRIMARY, strokeWidth: 0 }}
+            dot={{ r: 3.5, fill: C_CURRENT, strokeWidth: 0 }}
             activeDot={{ r: 5.5, stroke: "var(--background)", strokeWidth: 2 }}
             isAnimationActive={false}
             connectNulls
@@ -158,13 +159,13 @@ function ChartTooltip({
   active,
   payload,
   label,
-  primaryLabel,
+  currentLabel,
   baselineLabel,
 }: {
   active?: boolean;
   payload?: TooltipPayloadEntry[];
   label?: number;
-  primaryLabel: string;
+  currentLabel: string;
   baselineLabel: string;
 }) {
   if (!active || !payload || payload.length === 0) return null;
@@ -209,11 +210,11 @@ function ChartTooltip({
       </div>
       <div className="space-y-1 text-sm">
         {row(
-          primaryLabel,
-          datum.primary,
-          C_PRIMARY,
-          datum.primaryBandLow,
-          datum.primaryBandHigh,
+          currentLabel,
+          datum.current,
+          C_CURRENT,
+          datum.currentBandLow,
+          datum.currentBandHigh,
         )}
         {row(
           baselineLabel,

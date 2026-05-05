@@ -221,11 +221,7 @@ function MatrixRow({
             key={it.iterationNumber}
             className="border-border border-b px-3 py-2.5 align-middle group-last:border-b-0"
           >
-            <CellRender
-              cell={cell}
-              primaryVariant={it.primaryVariant}
-              baselineVariant={it.baselineVariant}
-            />
+            <CellRender cell={cell} baselineResolved={it.baselineResolved} />
           </td>
         );
       })}
@@ -235,33 +231,26 @@ function MatrixRow({
 
 function CellRender({
   cell,
-  primaryVariant,
-  baselineVariant,
+  baselineResolved,
 }: {
   cell: ExpectationCell | null;
-  primaryVariant: string | null;
-  baselineVariant: string | null;
+  baselineResolved: string | null;
 }) {
   if (
     cell === null ||
-    (cell.primary.total === 0 && cell.baseline.total === 0)
+    (cell.current.total === 0 && cell.baseline.total === 0)
   ) {
     return (
       <span className="text-muted-foreground/40 font-mono text-[11px]">—</span>
     );
   }
+  const baselineLabel = baselineResolved
+    ? `baseline (${baselineResolved})`
+    : "baseline";
   return (
     <div className="flex flex-col gap-1">
-      <TallyMini
-        tally={cell.primary}
-        variant="primary"
-        variantLabel={primaryVariant ?? "primary"}
-      />
-      <TallyMini
-        tally={cell.baseline}
-        variant="baseline"
-        variantLabel={baselineVariant ?? "baseline"}
-      />
+      <TallyMini tally={cell.current} variant="current" label="current" />
+      <TallyMini tally={cell.baseline} variant="baseline" label={baselineLabel} />
     </div>
   );
 }
@@ -269,11 +258,11 @@ function CellRender({
 function TallyMini({
   tally,
   variant,
-  variantLabel,
+  label,
 }: {
   tally: ExpectationCellTally;
-  variant: "primary" | "baseline";
-  variantLabel: string;
+  variant: "current" | "baseline";
+  label: string;
 }) {
   if (tally.total === 0) {
     return (
@@ -281,7 +270,7 @@ function TallyMini({
     );
   }
   const passColor =
-    variant === "primary"
+    variant === "current"
       ? "bg-emerald-500/80 dark:bg-emerald-400/80"
       : "bg-amber-600/70 dark:bg-amber-300/70";
   const failColor = "bg-muted-foreground/15";
@@ -290,7 +279,7 @@ function TallyMini({
     tally.evidence.length > 0
       ? `\n\n${tally.evidence.map((e, i) => `run ${i + 1}: ${e}`).join("\n")}`
       : "";
-  const tip = `${variantLabel}: ${tally.passed}/${tally.total} passed${evidenceTip}`;
+  const tip = `${label}: ${tally.passed}/${tally.total} passed${evidenceTip}`;
   return (
     <span className="flex items-center gap-1.5" title={tip}>
       <span className="flex gap-0.5">
@@ -315,7 +304,7 @@ function Legend() {
       <span>cells:</span>
       <LegendDot
         cls="bg-emerald-500/80 dark:bg-emerald-400/80"
-        label="primary pass"
+        label="current pass"
       />
       <LegendDot
         cls="bg-amber-600/70 dark:bg-amber-300/70"

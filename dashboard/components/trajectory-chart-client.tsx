@@ -17,17 +17,17 @@ const TrajectoryChart = dynamic(
 
 export function TrajectoryChartClient({
   data,
-  primaryLabel,
+  currentLabel,
   baselineLabel,
 }: {
   data: TrajectoryDatum[];
-  primaryLabel?: string;
+  currentLabel?: string;
   baselineLabel?: string;
 }) {
   return (
     <TrajectoryChart
       data={data}
-      primaryLabel={primaryLabel}
+      currentLabel={currentLabel}
       baselineLabel={baselineLabel}
     />
   );

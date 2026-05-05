@@ -14,7 +14,7 @@ import { fmtDelta, fmtPct } from "@/lib/format";
 
 export type PerEvalPoint = {
   iterationNumber: number;
-  primaryMean: number | null;
+  currentMean: number | null;
   baselineMean: number | null;
 };
 
@@ -24,11 +24,11 @@ export type PerEvalTrajectoryDatum = {
   points: PerEvalPoint[];
 };
 
-const C_PRIMARY = "oklch(0.62 0.14 150)";
+const C_CURRENT = "oklch(0.62 0.14 150)";
 const C_BASELINE = "oklch(0.60 0.11 55)";
 
 const chartConfig = {
-  primary: { label: "primary", color: C_PRIMARY },
+  current: { label: "current", color: C_CURRENT },
   baseline: { label: "baseline", color: C_BASELINE },
 } satisfies ChartConfig;
 
@@ -43,8 +43,8 @@ export function PerEvalTrajectorySparkline({
   const latest = points[points.length - 1];
   const first = points[0];
   const delta =
-    latest?.primaryMean != null && first?.primaryMean != null
-      ? latest.primaryMean - first.primaryMean
+    latest?.currentMean != null && first?.currentMean != null
+      ? latest.currentMean - first.currentMean
       : null;
 
   const tile = (
@@ -60,7 +60,7 @@ export function PerEvalTrajectorySparkline({
         </div>
         <div className="flex flex-col items-end gap-0.5 font-mono tabular-nums">
           <span className="text-xl font-medium">
-            {fmtPct(latest?.primaryMean ?? null, 0)}
+            {fmtPct(latest?.currentMean ?? null, 0)}
           </span>
           {delta !== null ? (
             <span
@@ -118,10 +118,10 @@ export function PerEvalTrajectorySparkline({
             />
             <Line
               type="monotone"
-              dataKey="primaryMean"
-              stroke={C_PRIMARY}
+              dataKey="currentMean"
+              stroke={C_CURRENT}
               strokeWidth={1.75}
-              dot={{ r: 2.5, fill: C_PRIMARY, strokeWidth: 0 }}
+              dot={{ r: 2.5, fill: C_CURRENT, strokeWidth: 0 }}
               activeDot={{ r: 4.5, stroke: "var(--background)", strokeWidth: 1.5 }}
               isAnimationActive={false}
               connectNulls
@@ -175,7 +175,7 @@ function MiniTooltip({ active, payload, label }: MiniTooltipProps) {
         iter #{label}
       </div>
       <div className="space-y-0.5 text-xs">
-        {row("primary", d.primaryMean, C_PRIMARY)}
+        {row("current", d.currentMean, C_CURRENT)}
         {row("baseline", d.baselineMean, C_BASELINE)}
       </div>
     </div>

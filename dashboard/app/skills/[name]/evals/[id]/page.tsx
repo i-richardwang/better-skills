@@ -43,36 +43,39 @@ export default async function EvalDetailPage({
 
   const trajectoryData: TrajectoryDatum[] = detail.trajectory.map((p) => ({
     iteration: p.iterationNumber,
-    primary: p.primaryMean,
-    primaryBandLow: null,
-    primaryBandHigh: null,
+    current: p.currentMean,
+    currentBandLow: null,
+    currentBandHigh: null,
     baseline: p.baselineMean,
     baselineBandLow: null,
     baselineBandHigh: null,
   }));
 
-  // Variant labels — pulled from the latest iteration so the chart legend
-  // reflects what the user actually wrote in evals.json. Older iterations may
-  // have different names (renaming variants is fine — historical labels live
-  // in their own iteration row).
+  // Configs are fixed names ("current"/"baseline"). Baseline label includes
+  // the resolved spec from the latest iteration so users see what was
+  // compared against in the most-recent run. Older iterations may have
+  // compared against different baselines — those still display correctly
+  // because each row uses its own iteration's baselineResolved.
   const latestIter = detail.iterations[0] ?? null;
-  const primaryLabel = latestIter?.primaryVariant ?? "primary";
-  const baselineLabel = latestIter?.baselineVariant ?? "baseline";
+  const currentLabel = "current";
+  const baselineLabel = latestIter?.baselineResolved
+    ? `baseline (${latestIter.baselineResolved})`
+    : "baseline";
 
   const latest = detail.trajectory[detail.trajectory.length - 1] ?? null;
   const first = detail.trajectory[0] ?? null;
   const latestDelta =
     latest &&
-    latest.primaryMean !== null &&
+    latest.currentMean !== null &&
     latest.baselineMean !== null
-      ? latest.primaryMean - latest.baselineMean
+      ? latest.currentMean - latest.baselineMean
       : null;
   const lifetimeDelta =
     latest &&
     first &&
-    latest.primaryMean !== null &&
-    first.primaryMean !== null
-      ? latest.primaryMean - first.primaryMean
+    latest.currentMean !== null &&
+    first.currentMean !== null
+      ? latest.currentMean - first.currentMean
       : null;
 
   const evalLabel = detail.evalName ?? `eval ${detail.evalId}`;
@@ -115,10 +118,10 @@ export default async function EvalDetailPage({
             {detail.iterations.length} iteration
             {detail.iterations.length === 1 ? "" : "s"}
           </Badge>
-          {latest?.primaryMean !== null &&
-          latest?.primaryMean !== undefined ? (
+          {latest?.currentMean !== null &&
+          latest?.currentMean !== undefined ? (
             <Badge variant="secondary">
-              latest {primaryLabel}: {fmtPct(latest.primaryMean)}
+              latest {currentLabel}: {fmtPct(latest.currentMean)}
             </Badge>
           ) : null}
           {latestDelta !== null ? (
@@ -171,7 +174,7 @@ export default async function EvalDetailPage({
             ) : (
               <TrajectoryChartClient
                 data={trajectoryData}
-                primaryLabel={primaryLabel}
+                currentLabel={currentLabel}
                 baselineLabel={baselineLabel}
               />
             )}
@@ -203,7 +206,7 @@ export default async function EvalDetailPage({
               skillName={name}
             />
           ))}
-          {/* primaryLabel/baselineLabel implicit per-iteration in IterationResult below */}
+          {/* labels are derived per-iteration in IterationResult */}
         </div>
       </section>
     </div>
@@ -216,7 +219,7 @@ function inferExpectationTextsFromIterations(
   const seen = new Set<string>();
   const out: string[] = [];
   for (const it of iters) {
-    for (const r of [...it.primaryRuns, ...it.baselineRuns]) {
+    for (const r of [...it.currentRuns, ...it.baselineRuns]) {
       for (const e of r.expectations) {
         if (!seen.has(e.text)) {
           seen.add(e.text);
@@ -349,12 +352,14 @@ function IterationResult({
   expectationTexts: string[];
   skillName: string;
 }) {
-  const primaryAvg = mean(iteration.primaryRuns.map((r) => r.passRate));
+  const currentAvg = mean(iteration.currentRuns.map((r) => r.passRate));
   const baselineAvg = mean(iteration.baselineRuns.map((r) => r.passRate));
   const delta =
-    primaryAvg !== null && baselineAvg !== null ? primaryAvg - baselineAvg : null;
-  const primaryLabel = iteration.primaryVariant ?? "primary";
-  const baselineLabel = iteration.baselineVariant ?? "baseline";
+    currentAvg !== null && baselineAvg !== null ? currentAvg - baselineAvg : null;
+  const currentLabel = "current";
+  const baselineLabel = iteration.baselineResolved
+    ? `baseline (${iteration.baselineResolved})`
+    : "baseline";
 
   return (
     <Card>
@@ -380,7 +385,7 @@ function IterationResult({
         </div>
         <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
           <span className="text-muted-foreground">
-            {primaryLabel}: {fmtPct(primaryAvg)} · {baselineLabel}: {fmtPct(baselineAvg)}
+            {currentLabel}: {fmtPct(currentAvg)} · {baselineLabel}: {fmtPct(baselineAvg)}
           </span>
           {delta !== null ? (
             <Badge
@@ -398,7 +403,7 @@ function IterationResult({
         <div className="border-border border-b">
           <div className="text-muted-foreground border-border grid grid-cols-[1fr_8rem_8rem] items-baseline gap-3 border-b px-5 py-2.5 font-mono text-[10px] tracking-widest uppercase">
             <span>Expectations</span>
-            <span className="text-right">{primaryLabel}</span>
+            <span className="text-right">{currentLabel}</span>
             <span className="text-right">{baselineLabel}</span>
           </div>
           <ul>
@@ -406,7 +411,7 @@ function IterationResult({
               <ExpectationCompareRow
                 key={i}
                 text={text}
-                primaryRuns={iteration.primaryRuns}
+                currentRuns={iteration.currentRuns}
                 baselineRuns={iteration.baselineRuns}
               />
             ))}
@@ -417,11 +422,11 @@ function IterationResult({
       <div>
         <div className="text-muted-foreground border-border grid grid-cols-[2.5rem_1fr_1fr] items-baseline gap-3 border-b px-5 py-2.5 font-mono text-[10px] tracking-widest uppercase">
           <span>Run</span>
-          <span>{primaryLabel}</span>
+          <span>{currentLabel}</span>
           <span>{baselineLabel}</span>
         </div>
         <RunPairs
-          primaryRuns={iteration.primaryRuns}
+          currentRuns={iteration.currentRuns}
           baselineRuns={iteration.baselineRuns}
         />
       </div>
@@ -437,20 +442,20 @@ function mean(values: (number | null)[]): number | null {
 
 function ExpectationCompareRow({
   text,
-  primaryRuns,
+  currentRuns,
   baselineRuns,
 }: {
   text: string;
-  primaryRuns: EvalRunResult[];
+  currentRuns: EvalRunResult[];
   baselineRuns: EvalRunResult[];
 }) {
-  const primaryTally = tallyExpectation(text, primaryRuns);
+  const currentTally = tallyExpectation(text, currentRuns);
   const baselineTally = tallyExpectation(text, baselineRuns);
 
   return (
     <li className="border-border grid grid-cols-[1fr_8rem_8rem] items-center gap-3 border-b px-5 py-2.5 last:border-b-0">
       <span className="pr-2 text-sm leading-snug">{text}</span>
-      <TallyCell tally={primaryTally} variant="primary" />
+      <TallyCell tally={currentTally} variant="current" />
       <TallyCell tally={baselineTally} variant="baseline" />
     </li>
   );
@@ -475,7 +480,7 @@ function TallyCell({
   variant,
 }: {
   tally: Tally;
-  variant: "primary" | "baseline";
+  variant: "current" | "baseline";
 }) {
   const { passed, total } = tally;
   if (total === 0) {
@@ -492,7 +497,7 @@ function TallyCell({
   }
 
   const passColor =
-    variant === "primary"
+    variant === "current"
       ? "bg-emerald-500/80 dark:bg-emerald-400/80"
       : "bg-amber-600/70 dark:bg-amber-300/70";
   const failColor = "bg-muted-foreground/15";
@@ -519,23 +524,23 @@ function TallyCell({
 }
 
 function RunPairs({
-  primaryRuns,
+  currentRuns,
   baselineRuns,
 }: {
-  primaryRuns: EvalRunResult[];
+  currentRuns: EvalRunResult[];
   baselineRuns: EvalRunResult[];
 }) {
   const runNumbers = new Set<number>();
-  for (const r of primaryRuns) runNumbers.add(r.runNumber);
+  for (const r of currentRuns) runNumbers.add(r.runNumber);
   for (const r of baselineRuns) runNumbers.add(r.runNumber);
   const sorted = [...runNumbers].sort((a, b) => a - b);
 
   return (
     <ul>
       {sorted.map((n) => {
-        const p = primaryRuns.find((r) => r.runNumber === n) ?? null;
+        const p = currentRuns.find((r) => r.runNumber === n) ?? null;
         const b = baselineRuns.find((r) => r.runNumber === n) ?? null;
-        return <RunPairRow key={n} runNumber={n} primaryRun={p} baselineRun={b} />;
+        return <RunPairRow key={n} runNumber={n} currentRun={p} baselineRun={b} />;
       })}
     </ul>
   );
@@ -543,19 +548,19 @@ function RunPairs({
 
 function RunPairRow({
   runNumber,
-  primaryRun,
+  currentRun,
   baselineRun,
 }: {
   runNumber: number;
-  primaryRun: EvalRunResult | null;
+  currentRun: EvalRunResult | null;
   baselineRun: EvalRunResult | null;
 }) {
   const failedExp = (run: EvalRunResult | null): Expectation[] =>
     run ? run.expectations.filter((e) => !e.passed) : [];
 
-  const primaryFailed = failedExp(primaryRun);
+  const currentFailed = failedExp(currentRun);
   const baselineFailed = failedExp(baselineRun);
-  const hasDetails = primaryFailed.length > 0 || baselineFailed.length > 0;
+  const hasDetails = currentFailed.length > 0 || baselineFailed.length > 0;
 
   return (
     <li className="border-border border-b last:border-b-0">
@@ -578,13 +583,13 @@ function RunPairRow({
               </span>
             ) : null}
           </span>
-          <RunMetricCell run={primaryRun} />
+          <RunMetricCell run={currentRun} />
           <RunMetricCell run={baselineRun} />
         </summary>
         {hasDetails ? (
           <div className="bg-muted/20 border-border grid grid-cols-[2.5rem_1fr_1fr] gap-3 border-t px-5 py-3">
             <span aria-hidden />
-            <FailureList runFailed={primaryFailed} variant="primary" />
+            <FailureList runFailed={currentFailed} variant="current" />
             <FailureList runFailed={baselineFailed} variant="baseline" />
           </div>
         ) : null}
@@ -622,14 +627,14 @@ function FailureList({
   variant,
 }: {
   runFailed: Expectation[];
-  variant: "primary" | "baseline";
+  variant: "current" | "baseline";
 }) {
   if (runFailed.length === 0) {
     return (
       <span
         className={cn(
           "font-mono text-[10px] tracking-widest uppercase",
-          variant === "primary"
+          variant === "current"
             ? "text-emerald-700 dark:text-emerald-300"
             : "text-amber-700 dark:text-amber-300",
         )}

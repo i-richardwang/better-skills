@@ -11,8 +11,9 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
-// Variant names are user-chosen (declared in evals.json) — stored as plain text
-// instead of a pgEnum so any naming scheme works.
+// Each iteration runs exactly two configs — `current` (the live skill) and
+// `baseline` (resolved from evals.json `default_baseline` or the --baseline
+// CLI flag). The literal strings live in `runs.configuration`.
 
 export const skills = pgTable(
   "skills",
@@ -40,19 +41,19 @@ export const iterations = pgTable(
       .references(() => skills.id, { onDelete: "cascade" }),
     iterationNumber: integer("iteration_number").notNull(),
 
-    // Variant declarations for this iteration (from evals.json defaults).
-    primaryVariant: text("primary_variant"),
-    baselineVariant: text("baseline_variant"),
-    variants: text("variants").array(),
+    // Records what `current` was compared against in this iteration. Values
+    // mirror the baseline grammar: "none" | "iteration-N" | "path:/abs". Null
+    // when the upload predates the baseline_resolved field.
+    baselineResolved: text("baseline_resolved"),
 
-    // Aggregated metrics for the primary / baseline variants. Charts and
-    // top-level KPIs read from here.
-    primaryPassRateMean: numeric("primary_pass_rate_mean", { precision: 5, scale: 4 }),
-    primaryPassRateStddev: numeric("primary_pass_rate_stddev", { precision: 5, scale: 4 }),
+    // Aggregated metrics for current vs baseline. Charts and top-level KPIs
+    // read from here.
+    currentPassRateMean: numeric("current_pass_rate_mean", { precision: 5, scale: 4 }),
+    currentPassRateStddev: numeric("current_pass_rate_stddev", { precision: 5, scale: 4 }),
     baselinePassRateMean: numeric("baseline_pass_rate_mean", { precision: 5, scale: 4 }),
     baselinePassRateStddev: numeric("baseline_pass_rate_stddev", { precision: 5, scale: 4 }),
-    primaryTokensMean: real("primary_tokens_mean"),
-    primaryTimeSecondsMean: real("primary_time_seconds_mean"),
+    currentTokensMean: real("current_tokens_mean"),
+    currentTimeSecondsMean: real("current_time_seconds_mean"),
     baselineTokensMean: real("baseline_tokens_mean"),
     baselineTimeSecondsMean: real("baseline_time_seconds_mean"),
 
@@ -88,7 +89,9 @@ export const runs = pgTable(
       .references(() => iterations.id, { onDelete: "cascade" }),
     evalId: integer("eval_id").notNull(),
     evalName: text("eval_name"),
-    // Variant name as declared in evals.json — free text, no enum.
+    // Always one of "current" | "baseline". Stored as plain text rather than
+    // an enum so a future schema change (e.g. extra comparison branches)
+    // doesn't require a column-type migration.
     configuration: text("configuration").notNull(),
     runNumber: integer("run_number").notNull(),
 

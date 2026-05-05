@@ -17,11 +17,11 @@ iterations, and watch metrics evolve over time.
   iteration count, last-upload timestamp, and a KPI strip (total skills /
   iterations / runs / runs-per-week).
 - **Skill overview (`/skills/[name]`)** — iteration history table,
-  trajectory charts (pass rate, tokens, time), best/worst variant per
-  metric.
+  trajectory charts (pass rate, tokens, time) showing `current` vs
+  `baseline` per iteration.
 - **Iteration detail (`/skills/[name]/iterations/[n]`)** — full SKILL.md
   diff against the previous iteration, per-eval breakdown, expectation
-  matrix (which assertions pass/fail per variant).
+  matrix (which assertions pass/fail under `current` vs `baseline`).
 - **Eval detail (`/skills/[name]/evals/[id]`)** — resource trajectories
   (time + tokens) and pass-rate trends scoped to a single eval case.
 
@@ -46,7 +46,8 @@ Three tables, defined in `lib/db/schema.ts`:
   (JSONB), plus the rolled-up metrics (pass rate mean/stddev, total
   tokens, total seconds).
 - **`runs`** — individual run results within an iteration (eval id,
-  variant, pass/fail counts, tokens, seconds, tool-call summary).
+  configuration `"current"` or `"baseline"`, pass/fail counts, tokens,
+  seconds, tool-call summary).
 
 The JSONB-heavy design lets the dashboard answer "show me what the SKILL.md
 looked like at iteration 3 vs iteration 7" without re-running anything —

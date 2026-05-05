@@ -64,14 +64,14 @@ export default async function SkillPage({
   const first = points[0] ?? null;
   const chartData: TrajectoryDatum[] = points.map((p) => ({
     iteration: p.iterationNumber,
-    primary: p.primaryMean,
-    primaryBandLow:
-      p.primaryMean !== null && p.primaryStddev !== null
-        ? Math.max(0, p.primaryMean - p.primaryStddev)
+    current: p.currentMean,
+    currentBandLow:
+      p.currentMean !== null && p.currentStddev !== null
+        ? Math.max(0, p.currentMean - p.currentStddev)
         : null,
-    primaryBandHigh:
-      p.primaryMean !== null && p.primaryStddev !== null
-        ? Math.min(1, p.primaryMean + p.primaryStddev)
+    currentBandHigh:
+      p.currentMean !== null && p.currentStddev !== null
+        ? Math.min(1, p.currentMean + p.currentStddev)
         : null,
     baseline: p.baselineMean,
     baselineBandLow:
@@ -86,33 +86,36 @@ export default async function SkillPage({
 
   const resourceData: ResourceTrajectoryDatum[] = points.map((p) => ({
     iteration: p.iterationNumber,
-    primaryTokens: p.primaryTokensMean,
+    currentTokens: p.currentTokensMean,
     baselineTokens: p.baselineTokensMean,
-    primarySeconds: p.primaryTimeSecondsMean,
+    currentSeconds: p.currentTimeSecondsMean,
     baselineSeconds: p.baselineTimeSecondsMean,
   }));
 
   const hasResourceData = resourceData.some(
     (d) =>
-      d.primaryTokens !== null ||
+      d.currentTokens !== null ||
       d.baselineTokens !== null ||
-      d.primarySeconds !== null ||
+      d.currentSeconds !== null ||
       d.baselineSeconds !== null,
   );
 
-  // Variant labels — use the most-recent iteration's declared names so the
-  // chart legend reflects what the user actually wrote in evals.json.
-  const primaryLabel = latest?.primaryVariant ?? "primary";
-  const baselineLabel = latest?.baselineVariant ?? "baseline";
+  // Configs are fixed names ("current"/"baseline"). The baseline label
+  // includes the resolved spec (e.g. "iteration-1") so the chart legend
+  // says exactly what was compared against.
+  const currentLabel = "current";
+  const baselineLabel = latest?.baselineResolved
+    ? `baseline (${latest.baselineResolved})`
+    : "baseline";
 
   const latestDelta =
-    latest && latest.primaryMean !== null && latest.baselineMean !== null
-      ? latest.primaryMean - latest.baselineMean
+    latest && latest.currentMean !== null && latest.baselineMean !== null
+      ? latest.currentMean - latest.baselineMean
       : null;
 
   const trendDelta =
-    first && latest && first.primaryMean !== null && latest.primaryMean !== null
-      ? latest.primaryMean - first.primaryMean
+    first && latest && first.currentMean !== null && latest.currentMean !== null
+      ? latest.currentMean - first.currentMean
       : null;
 
   return (
@@ -125,11 +128,11 @@ export default async function SkillPage({
       />
 
       <KpiRow
-        latestPassRate={latest?.primaryMean ?? null}
+        latestPassRate={latest?.currentMean ?? null}
         latestDelta={latestDelta}
         trendDelta={trendDelta}
         latestIteration={latest?.iterationNumber ?? null}
-        primaryLabel={primaryLabel}
+        currentLabel={currentLabel}
         baselineLabel={baselineLabel}
       />
 
@@ -138,7 +141,7 @@ export default async function SkillPage({
           <h2 className="font-heading text-xl tracking-tight">
             Pass-rate trajectory
           </h2>
-          <LegendHint primaryLabel={primaryLabel} baselineLabel={baselineLabel} />
+          <LegendHint currentLabel={currentLabel} baselineLabel={baselineLabel} />
         </header>
         <Card>
           <CardContent className="px-2 py-2">
@@ -147,7 +150,7 @@ export default async function SkillPage({
             ) : (
               <TrajectoryChartClient
                 data={chartData}
-                primaryLabel={primaryLabel}
+                currentLabel={currentLabel}
                 baselineLabel={baselineLabel}
               />
             )}
@@ -182,7 +185,7 @@ export default async function SkillPage({
           </header>
           <ResourceTrajectoryGridClient
             data={resourceData}
-            primaryLabel={primaryLabel}
+            currentLabel={currentLabel}
             baselineLabel={baselineLabel}
           />
         </section>
@@ -274,20 +277,20 @@ function KpiRow({
   latestDelta,
   trendDelta,
   latestIteration,
-  primaryLabel,
+  currentLabel,
   baselineLabel,
 }: {
   latestPassRate: number | null;
   latestDelta: number | null;
   trendDelta: number | null;
   latestIteration: number | null;
-  primaryLabel: string;
+  currentLabel: string;
   baselineLabel: string;
 }) {
   return (
     <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <Kpi
-        label={`Latest ${primaryLabel}`}
+        label={`Latest ${currentLabel}`}
         value={fmtPct(latestPassRate, 1)}
         hint={latestIteration !== null ? `iteration #${latestIteration}` : "—"}
       />
@@ -317,7 +320,7 @@ function KpiRow({
                 ? "destructive"
                 : "secondary"
         }
-        hint={`${primaryLabel} lifetime movement`}
+        hint={`${currentLabel} lifetime movement`}
       />
       <Kpi
         label="Runs per config"
@@ -367,15 +370,15 @@ function Kpi({
 }
 
 function LegendHint({
-  primaryLabel,
+  currentLabel,
   baselineLabel,
 }: {
-  primaryLabel: string;
+  currentLabel: string;
   baselineLabel: string;
 }) {
   return (
     <div className="flex items-center gap-4 font-mono text-[10px] tracking-widest uppercase">
-      <LegendDot color="oklch(0.62 0.14 150)" label={primaryLabel} solid />
+      <LegendDot color="oklch(0.62 0.14 150)" label={currentLabel} solid />
       <LegendDot color="oklch(0.60 0.11 55)" label={baselineLabel} />
     </div>
   );
@@ -441,11 +444,11 @@ function IterationsTable({
         <TableHeader>
           <tr>
             <TableHead>Iter</TableHead>
-            <TableHead>Primary</TableHead>
+            <TableHead>Current</TableHead>
             <TableHead>Baseline</TableHead>
             <TableHead>Δ</TableHead>
-            <TableHead>Tokens (primary)</TableHead>
-            <TableHead>Time (primary)</TableHead>
+            <TableHead>Tokens (current)</TableHead>
+            <TableHead>Time (current)</TableHead>
             <TableHead>Commit</TableHead>
             <TableHead>Uploaded</TableHead>
           </tr>
@@ -453,8 +456,8 @@ function IterationsTable({
         <TableBody>
           {sorted.map((p) => {
             const delta =
-              p.primaryMean !== null && p.baselineMean !== null
-                ? p.primaryMean - p.baselineMean
+              p.currentMean !== null && p.baselineMean !== null
+                ? p.currentMean - p.baselineMean
                 : null;
             const href = `/skills/${encodeURIComponent(name)}/iterations/${p.iterationNumber}`;
             return (
@@ -469,10 +472,10 @@ function IterationsTable({
                 </TableCell>
                 <TableCell className="font-mono tabular-nums">
                   <div className="flex items-baseline gap-1.5">
-                    <span>{fmtPct(p.primaryMean, 1)}</span>
-                    {p.primaryStddev !== null ? (
+                    <span>{fmtPct(p.currentMean, 1)}</span>
+                    {p.currentStddev !== null ? (
                       <span className="text-muted-foreground text-[10px]">
-                        ±{(p.primaryStddev * 100).toFixed(1)}
+                        ±{(p.currentStddev * 100).toFixed(1)}
                       </span>
                     ) : null}
                   </div>
@@ -505,10 +508,10 @@ function IterationsTable({
                   )}
                 </TableCell>
                 <TableCell className="text-muted-foreground font-mono tabular-nums">
-                  {fmtTokens(p.primaryTokensMean)}
+                  {fmtTokens(p.currentTokensMean)}
                 </TableCell>
                 <TableCell className="text-muted-foreground font-mono tabular-nums">
-                  {fmtSeconds(p.primaryTimeSecondsMean)}
+                  {fmtSeconds(p.currentTimeSecondsMean)}
                 </TableCell>
                 <TableCell className="text-muted-foreground font-mono text-xs">
                   {shortSha(p.gitCommitSha)}

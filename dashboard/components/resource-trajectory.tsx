@@ -13,24 +13,24 @@ import { fmtSeconds, fmtSecondsCompact, fmtTokens } from "@/lib/format";
 
 export type ResourceTrajectoryDatum = {
   iteration: number;
-  primaryTokens: number | null;
+  currentTokens: number | null;
   baselineTokens: number | null;
-  primarySeconds: number | null;
+  currentSeconds: number | null;
   baselineSeconds: number | null;
 };
 
-const C_PRIMARY = "oklch(0.62 0.14 150)";
+const C_CURRENT = "oklch(0.62 0.14 150)";
 const C_BASELINE = "oklch(0.60 0.11 55)";
 
 type Metric = "tokens" | "seconds";
 
 export function ResourceTrajectoryGrid({
   data,
-  primaryLabel = "primary",
+  currentLabel = "current",
   baselineLabel = "baseline",
 }: {
   data: ResourceTrajectoryDatum[];
-  primaryLabel?: string;
+  currentLabel?: string;
   baselineLabel?: string;
 }) {
   if (data.length === 0) {
@@ -47,7 +47,7 @@ export function ResourceTrajectoryGrid({
         subtitle="mean per run"
         metric="tokens"
         data={data}
-        primaryLabel={primaryLabel}
+        currentLabel={currentLabel}
         baselineLabel={baselineLabel}
       />
       <ResourcePanel
@@ -55,7 +55,7 @@ export function ResourceTrajectoryGrid({
         subtitle="mean wall-clock per run"
         metric="seconds"
         data={data}
-        primaryLabel={primaryLabel}
+        currentLabel={currentLabel}
         baselineLabel={baselineLabel}
       />
     </div>
@@ -67,28 +67,28 @@ function ResourcePanel({
   subtitle,
   metric,
   data,
-  primaryLabel,
+  currentLabel,
   baselineLabel,
 }: {
   title: string;
   subtitle: string;
   metric: Metric;
   data: ResourceTrajectoryDatum[];
-  primaryLabel: string;
+  currentLabel: string;
   baselineLabel: string;
 }) {
-  const primaryKey = metric === "tokens" ? "primaryTokens" : "primarySeconds";
+  const currentKey = metric === "tokens" ? "currentTokens" : "currentSeconds";
   const baselineKey = metric === "tokens" ? "baselineTokens" : "baselineSeconds";
   const fmt = metric === "tokens" ? fmtTokens : fmtSeconds;
   const axisFmt = metric === "tokens" ? fmtTokens : fmtSecondsCompact;
 
   const chartConfig = {
-    primary: { label: primaryLabel, color: C_PRIMARY },
+    current: { label: currentLabel, color: C_CURRENT },
     baseline: { label: baselineLabel, color: C_BASELINE },
   } satisfies ChartConfig;
 
   const latest = data[data.length - 1];
-  const latestPrimary = latest?.[primaryKey] ?? null;
+  const latestCurrent = latest?.[currentKey] ?? null;
   const latestBaseline = latest?.[baselineKey] ?? null;
 
   return (
@@ -103,7 +103,7 @@ function ResourcePanel({
           </div>
         </div>
         <div className="flex flex-col items-end gap-0.5 font-mono tabular-nums">
-          <span className="text-xl font-medium">{fmt(latestPrimary)}</span>
+          <span className="text-xl font-medium">{fmt(latestCurrent)}</span>
           <span className="text-muted-foreground text-[10px] tracking-widest uppercase">
             vs {fmt(latestBaseline)}
           </span>
@@ -146,7 +146,7 @@ function ResourcePanel({
               domain={[0, "auto"]}
             />
             <Tooltip
-              content={<ResourceTooltip metric={metric} primaryLabel={primaryLabel} baselineLabel={baselineLabel} />}
+              content={<ResourceTooltip metric={metric} currentLabel={currentLabel} baselineLabel={baselineLabel} />}
               cursor={{ stroke: "var(--border)" }}
             />
             <Line
@@ -162,12 +162,12 @@ function ResourcePanel({
               connectNulls
             />
             <Line
-              name={primaryLabel}
+              name={currentLabel}
               type="monotone"
-              dataKey={primaryKey}
-              stroke={C_PRIMARY}
+              dataKey={currentKey}
+              stroke={C_CURRENT}
               strokeWidth={2}
-              dot={{ r: 3, fill: C_PRIMARY, strokeWidth: 0 }}
+              dot={{ r: 3, fill: C_CURRENT, strokeWidth: 0 }}
               activeDot={{ r: 5, stroke: "var(--background)", strokeWidth: 1.5 }}
               isAnimationActive={false}
               connectNulls
@@ -187,14 +187,14 @@ function ResourceTooltip({
   payload,
   label,
   metric,
-  primaryLabel,
+  currentLabel,
   baselineLabel,
 }: {
   active?: boolean;
   payload?: TooltipPayloadEntry[];
   label?: number;
   metric: Metric;
-  primaryLabel: string;
+  currentLabel: string;
   baselineLabel: string;
 }) {
   if (!active || !payload || payload.length === 0) return null;
@@ -202,8 +202,8 @@ function ResourceTooltip({
   if (!datum) return null;
 
   const fmt = metric === "tokens" ? fmtTokens : fmtSeconds;
-  const primaryVal =
-    metric === "tokens" ? datum.primaryTokens : datum.primarySeconds;
+  const currentVal =
+    metric === "tokens" ? datum.currentTokens : datum.currentSeconds;
   const baselineVal =
     metric === "tokens" ? datum.baselineTokens : datum.baselineSeconds;
 
@@ -227,7 +227,7 @@ function ResourceTooltip({
         iteration #{label}
       </div>
       <div className="space-y-1 text-sm">
-        {row(primaryLabel, primaryVal, C_PRIMARY)}
+        {row(currentLabel, currentVal, C_CURRENT)}
         {row(baselineLabel, baselineVal, C_BASELINE)}
       </div>
     </div>

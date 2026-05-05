@@ -7,10 +7,15 @@ import { checkUploadAuth } from "@/lib/upload-auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Variant names are user-chosen (declared in evals.json) and end up as
-// directory names + dashboard column keys. Restrict to identifier-like
-// characters so they're safe to display, log, and join on.
-const variantName = z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/);
+// Each iteration runs exactly two configs — `current` and `baseline`. The
+// upload API only accepts these two strings; anything else gets rejected at
+// the schema layer so bad payloads never touch the DB.
+const configurationName = z.enum(["current", "baseline"]);
+
+// Allowed shapes for the `baseline_resolved` field reported in benchmark
+// metadata: "none", "iteration-N" (N >= 1), or "path:/abs/path". Validated
+// here defensively even though the python runner enforces the same grammar.
+const baselineResolvedPattern = /^(none|iteration-\d+|path:.+)$/;
 
 // Skill-relative POSIX path. Defense-in-depth against path traversal,
 // absolute paths, Windows separators, and NULL bytes — the python scanner
@@ -43,7 +48,7 @@ const skillFilesSchema = z
 const incomingRunSchema = z.object({
   eval_id: z.number().int(),
   eval_name: z.string().max(500).optional(),
-  configuration: variantName,
+  configuration: configurationName,
   run_number: z.number().int(),
   grading: z.any().optional(),
 });
@@ -56,8 +61,8 @@ const bodySchema = z.object({
   skill_md: z.string().optional(),
   git_commit_sha: z.string().optional(),
   hostname: z.string().optional(),
-  // evals_definition is the full evals.json (variants + defaults + cases) so
-  // the dashboard can render the case prompts that produced these results.
+  // evals_definition is the full evals.json (defaults + cases) so the
+  // dashboard can render the case prompts that produced these results.
   evals_definition: z.any().optional(),
   // skill_files is the rest of the skill directory's text content
   // (sub-docs, agents, scripts) keyed by relative path. SKILL.md and
@@ -101,11 +106,8 @@ function asObj(v: unknown): JsonObject {
     : {};
 }
 
-function variantSummary(rs: JsonObject, variant: string | null) {
-  if (!variant) {
-    return { passMean: null, passStddev: null, tokens: null, time: null };
-  }
-  const v = asObj(rs[variant]);
+function configSummary(rs: JsonObject, config: "current" | "baseline") {
+  const v = asObj(rs[config]);
   const pass = asObj(v.pass_rate);
   const tok = asObj(v.tokens);
   const tm = asObj(v.time_seconds);
@@ -117,8 +119,8 @@ function variantSummary(rs: JsonObject, variant: string | null) {
   };
 }
 
-function asVariantName(v: unknown): string | null {
-  return typeof v === "string" && variantName.safeParse(v).success ? v : null;
+function asBaselineResolved(v: unknown): string | null {
+  return typeof v === "string" && baselineResolvedPattern.test(v) ? v : null;
 }
 
 function extractIterationSummary(benchmark: unknown) {
@@ -126,27 +128,19 @@ function extractIterationSummary(benchmark: unknown) {
   const meta = asObj(b.metadata);
   const rs = asObj(b.run_summary);
 
-  const declaredVariants = (toStringArray(meta.variants) ?? []).filter(
-    (n) => variantName.safeParse(n).success,
-  );
-  const primary = asVariantName(meta.primary_variant);
-  const baseline = asVariantName(meta.baseline_variant);
-
-  const p = variantSummary(rs, primary);
-  const bl = variantSummary(rs, baseline);
+  const cur = configSummary(rs, "current");
+  const bl = configSummary(rs, "baseline");
 
   const evalsRun = Array.isArray(meta.evals_run) ? meta.evals_run.length : null;
 
   return {
-    primaryVariant: primary,
-    baselineVariant: baseline,
-    variants: declaredVariants.length > 0 ? declaredVariants : null,
-    primaryPassRateMean: p.passMean,
-    primaryPassRateStddev: p.passStddev,
+    baselineResolved: asBaselineResolved(meta.baseline_resolved),
+    currentPassRateMean: cur.passMean,
+    currentPassRateStddev: cur.passStddev,
     baselinePassRateMean: bl.passMean,
     baselinePassRateStddev: bl.passStddev,
-    primaryTokensMean: p.tokens,
-    primaryTimeSecondsMean: p.time,
+    currentTokensMean: cur.tokens,
+    currentTimeSecondsMean: cur.time,
     baselineTokensMean: bl.tokens,
     baselineTimeSecondsMean: bl.time,
     runsPerConfiguration: toInt(meta.runs_per_configuration),
@@ -293,7 +287,7 @@ export async function POST(request: Request) {
         .update(schema.skills)
         .set({
           latestIterationNumber: iteration_number,
-          latestPassRate: iterSummary.primaryPassRateMean,
+          latestPassRate: iterSummary.currentPassRateMean,
           updatedAt: sql`now()`,
         })
         .where(eq(schema.skills.id, skillId));

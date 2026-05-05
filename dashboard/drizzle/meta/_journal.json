@@ -15,6 +15,13 @@
       "when": 1777208430121,
       "tag": "0001_add_skill_files",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777339200000,
+      "tag": "0002_rename_variants_to_current_baseline",
+      "breakpoints": true
     }
   ]
 }

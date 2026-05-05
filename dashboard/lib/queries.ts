@@ -62,21 +62,19 @@ export async function getPortfolioStats(): Promise<PortfolioStats> {
   };
 }
 
-// Variant naming: `primary` is the current/improved skill (was "with_skill"),
-// `baseline` is what it's compared against (was "without_skill"). Actual
-// variant names live in the iteration's `primaryVariant` / `baselineVariant`
-// fields and are used for chart/legend labels.
+// Each iteration runs two configs: `current` (the live skill) vs `baseline`
+// (resolved from evals.json default_baseline). `baselineResolved` records
+// what baseline pointed to (e.g. "iteration-1", "none", "path:/abs/...").
 
 export type IterationPoint = {
   iterationNumber: number;
-  primaryVariant: string | null;
-  baselineVariant: string | null;
-  primaryMean: number | null;
-  primaryStddev: number | null;
+  baselineResolved: string | null;
+  currentMean: number | null;
+  currentStddev: number | null;
   baselineMean: number | null;
   baselineStddev: number | null;
-  primaryTokensMean: number | null;
-  primaryTimeSecondsMean: number | null;
+  currentTokensMean: number | null;
+  currentTimeSecondsMean: number | null;
   baselineTokensMean: number | null;
   baselineTimeSecondsMean: number | null;
   runsPerConfiguration: number | null;
@@ -121,14 +119,13 @@ export async function getSkillTrajectory(
     latestPassRate: toNum(skill.latestPassRate),
     points: iters.map((it) => ({
       iterationNumber: it.iterationNumber,
-      primaryVariant: it.primaryVariant,
-      baselineVariant: it.baselineVariant,
-      primaryMean: toNum(it.primaryPassRateMean),
-      primaryStddev: toNum(it.primaryPassRateStddev),
+      baselineResolved: it.baselineResolved,
+      currentMean: toNum(it.currentPassRateMean),
+      currentStddev: toNum(it.currentPassRateStddev),
       baselineMean: toNum(it.baselinePassRateMean),
       baselineStddev: toNum(it.baselinePassRateStddev),
-      primaryTokensMean: it.primaryTokensMean,
-      primaryTimeSecondsMean: it.primaryTimeSecondsMean,
+      currentTokensMean: it.currentTokensMean,
+      currentTimeSecondsMean: it.currentTimeSecondsMean,
       baselineTokensMean: it.baselineTokensMean,
       baselineTimeSecondsMean: it.baselineTimeSecondsMean,
       runsPerConfiguration: it.runsPerConfiguration,
@@ -225,14 +222,13 @@ function extractExpectations(rawGrading: unknown): Expectation[] {
 export type IterationDetail = {
   skillName: string;
   iterationNumber: number;
-  primaryVariant: string | null;
-  baselineVariant: string | null;
-  primaryMean: number | null;
-  primaryStddev: number | null;
+  baselineResolved: string | null;
+  currentMean: number | null;
+  currentStddev: number | null;
   baselineMean: number | null;
   baselineStddev: number | null;
-  primaryTokensMean: number | null;
-  primaryTimeSecondsMean: number | null;
+  currentTokensMean: number | null;
+  currentTimeSecondsMean: number | null;
   baselineTokensMean: number | null;
   baselineTimeSecondsMean: number | null;
   runsPerConfiguration: number | null;
@@ -292,8 +288,6 @@ export async function getIterationDetail(
       asc(schema.runs.runNumber),
     );
 
-  // Closest prior iteration's snapshot for the diff view. Walks backwards
-  // by iteration number so a missing N−1 still finds N−2 etc.
   const [prev] = await db
     .select({
       iterationNumber: schema.iterations.iterationNumber,
@@ -315,14 +309,13 @@ export async function getIterationDetail(
   return {
     skillName: skill.name,
     iterationNumber: iter.iterationNumber,
-    primaryVariant: iter.primaryVariant,
-    baselineVariant: iter.baselineVariant,
-    primaryMean: toNum(iter.primaryPassRateMean),
-    primaryStddev: toNum(iter.primaryPassRateStddev),
+    baselineResolved: iter.baselineResolved,
+    currentMean: toNum(iter.currentPassRateMean),
+    currentStddev: toNum(iter.currentPassRateStddev),
     baselineMean: toNum(iter.baselinePassRateMean),
     baselineStddev: toNum(iter.baselinePassRateStddev),
-    primaryTokensMean: iter.primaryTokensMean,
-    primaryTimeSecondsMean: iter.primaryTimeSecondsMean,
+    currentTokensMean: iter.currentTokensMean,
+    currentTimeSecondsMean: iter.currentTimeSecondsMean,
     baselineTokensMean: iter.baselineTokensMean,
     baselineTimeSecondsMean: iter.baselineTimeSecondsMean,
     runsPerConfiguration: iter.runsPerConfiguration,
@@ -362,8 +355,6 @@ export type SkillCurrentSource = {
   skillFiles: Record<string, string> | null;
 };
 
-// Latest iteration's source snapshot only — used by the skill page to render
-// the "current source" view without bloating getSkillTrajectory's row size.
 export async function getSkillCurrentSource(
   name: string,
 ): Promise<SkillCurrentSource | null> {
@@ -395,7 +386,7 @@ export async function getSkillCurrentSource(
 
 export type PerEvalPoint = {
   iterationNumber: number;
-  primaryMean: number | null;
+  currentMean: number | null;
   baselineMean: number | null;
 };
 
@@ -415,30 +406,26 @@ export async function getSkillPerEvalTrajectory(
     .limit(1);
   if (!skill) return [];
 
-  // Join runs to iterations and label each run as primary or baseline based on
-  // the iteration's declared variants. Other variants (if any) are dropped from
-  // the per-eval chart — viewers always show the two-way comparison.
+  // Configurations are fixed strings ("current"/"baseline") so the SQL
+  // collapses to direct equality — no per-iteration variant lookup needed.
   const rows = await db.execute<{
     iteration_number: number;
     eval_id: number;
     eval_name: string | null;
-    role: "primary" | "baseline";
+    role: "current" | "baseline";
     mean_pass_rate: string | null;
   }>(sql`
     SELECT
       i.iteration_number,
       r.eval_id,
       MAX(r.eval_name) AS eval_name,
-      CASE
-        WHEN r.configuration = i.primary_variant THEN 'primary'
-        WHEN r.configuration = i.baseline_variant THEN 'baseline'
-      END AS role,
+      r.configuration AS role,
       AVG(r.pass_rate)::text AS mean_pass_rate
     FROM ${schema.iterations} i
     JOIN ${schema.runs} r ON r.iteration_id = i.id
     WHERE i.skill_id = ${skill.id}
-      AND (r.configuration = i.primary_variant OR r.configuration = i.baseline_variant)
-    GROUP BY i.iteration_number, r.eval_id, r.configuration, i.primary_variant, i.baseline_variant
+      AND r.configuration IN ('current', 'baseline')
+    GROUP BY i.iteration_number, r.eval_id, r.configuration
     ORDER BY r.eval_id, i.iteration_number
   `);
 
@@ -458,13 +445,13 @@ export async function getSkillPerEvalTrajectory(
     if (!point) {
       point = {
         iterationNumber: row.iteration_number,
-        primaryMean: null,
+        currentMean: null,
         baselineMean: null,
       };
       trajectory.points.push(point);
     }
     const v = row.mean_pass_rate === null ? null : Number(row.mean_pass_rate);
-    if (row.role === "primary") point.primaryMean = v;
+    if (row.role === "current") point.currentMean = v;
     else if (row.role === "baseline") point.baselineMean = v;
   }
 
@@ -492,15 +479,14 @@ export type EvalIterationResult = {
   iterationId: number;
   uploadedAt: Date;
   gitCommitSha: string | null;
-  primaryVariant: string | null;
-  baselineVariant: string | null;
-  primaryRuns: EvalRunResult[];
+  baselineResolved: string | null;
+  currentRuns: EvalRunResult[];
   baselineRuns: EvalRunResult[];
 };
 
 export type EvalTrajectoryPoint = {
   iterationNumber: number;
-  primaryMean: number | null;
+  currentMean: number | null;
   baselineMean: number | null;
 };
 
@@ -529,8 +515,7 @@ export async function getSkillEvalDetail(
     iteration_number: number;
     uploaded_at: Date;
     git_commit_sha: string | null;
-    primary_variant: string | null;
-    baseline_variant: string | null;
+    baseline_resolved: string | null;
     evals_definition: unknown;
     run_id: number;
     run_number: number;
@@ -550,8 +535,7 @@ export async function getSkillEvalDetail(
       i.iteration_number,
       i.uploaded_at,
       i.git_commit_sha,
-      i.primary_variant,
-      i.baseline_variant,
+      i.baseline_resolved,
       i.evals_definition,
       r.id AS run_id,
       r.run_number,
@@ -586,9 +570,8 @@ export async function getSkillEvalDetail(
         iterationId: row.iter_id,
         uploadedAt: row.uploaded_at,
         gitCommitSha: row.git_commit_sha,
-        primaryVariant: row.primary_variant,
-        baselineVariant: row.baseline_variant,
-        primaryRuns: [],
+        baselineResolved: row.baseline_resolved,
+        currentRuns: [],
         baselineRuns: [],
       });
       const defs = extractEvalsDefinition(row.evals_definition);
@@ -609,15 +592,14 @@ export async function getSkillEvalDetail(
       expectations: extractExpectations(row.raw_grading),
     };
     const bucket = byIter.get(row.iter_id)!;
-    if (row.configuration === bucket.primaryVariant) bucket.primaryRuns.push(result);
-    else if (row.configuration === bucket.baselineVariant) bucket.baselineRuns.push(result);
+    if (row.configuration === "current") bucket.currentRuns.push(result);
+    else if (row.configuration === "baseline") bucket.baselineRuns.push(result);
   }
 
   const itersAsc = [...byIter.values()].sort(
     (a, b) => a.iterationNumber - b.iterationNumber,
   );
 
-  // pick the latest non-null definition as the canonical task
   let definition: EvalDefinition | null = null;
   for (const it of [...itersAsc].reverse()) {
     const d = definitionsByIter.get(it.iterationId);
@@ -637,7 +619,7 @@ export async function getSkillEvalDetail(
 
   const trajectory: EvalTrajectoryPoint[] = itersAsc.map((it) => ({
     iterationNumber: it.iterationNumber,
-    primaryMean: meanOf(it.primaryRuns),
+    currentMean: meanOf(it.currentRuns),
     baselineMean: meanOf(it.baselineRuns),
   }));
 
@@ -646,7 +628,7 @@ export async function getSkillEvalDetail(
     evalId,
     evalName,
     definition,
-    iterations: itersAsc.slice().reverse(), // newest first for display
+    iterations: itersAsc.slice().reverse(),
     trajectory,
   };
 }

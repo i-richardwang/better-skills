@@ -41,13 +41,15 @@ export default async function IterationPage({
   if (!iter) notFound();
 
   const delta =
-    iter.primaryMean !== null && iter.baselineMean !== null
-      ? iter.primaryMean - iter.baselineMean
+    iter.currentMean !== null && iter.baselineMean !== null
+      ? iter.currentMean - iter.baselineMean
       : null;
 
-  const primaryLabel = iter.primaryVariant ?? "primary";
-  const baselineLabel = iter.baselineVariant ?? "baseline";
-  const grouped = groupRunsByEval(iter.runs, iter.primaryVariant, iter.baselineVariant);
+  const currentLabel = "current";
+  const baselineLabel = iter.baselineResolved
+    ? `baseline (${iter.baselineResolved})`
+    : "baseline";
+  const grouped = groupRunsByEval(iter.runs);
   const evalsById = new Map<number, EvalDefinition>();
   for (const e of iter.evalsDefinition ?? []) {
     evalsById.set(e.id, e);
@@ -99,11 +101,11 @@ export default async function IterationPage({
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
-          label={primaryLabel}
-          value={fmtPct(iter.primaryMean)}
+          label={currentLabel}
+          value={fmtPct(iter.currentMean)}
           hint={
-            iter.primaryStddev !== null
-              ? `σ ±${(iter.primaryStddev * 100).toFixed(1)}pp`
+            iter.currentStddev !== null
+              ? `σ ±${(iter.currentStddev * 100).toFixed(1)}pp`
               : undefined
           }
         />
@@ -128,20 +130,20 @@ export default async function IterationPage({
                   ? "destructive"
                   : "secondary"
           }
-          hint={`${primaryLabel} − ${baselineLabel}`}
+          hint={`${currentLabel} − ${baselineLabel}`}
         />
         <MetricCard
           label="Cost ratio"
           value={
-            iter.primaryTokensMean !== null &&
+            iter.currentTokensMean !== null &&
             iter.baselineTokensMean !== null &&
             iter.baselineTokensMean > 0
-              ? `${(iter.primaryTokensMean / iter.baselineTokensMean).toFixed(2)}×`
+              ? `${(iter.currentTokensMean / iter.baselineTokensMean).toFixed(2)}×`
               : "—"
           }
           hint={
-            iter.primaryTokensMean !== null
-              ? `${fmtTokens(iter.primaryTokensMean)} tokens`
+            iter.currentTokensMean !== null
+              ? `${fmtTokens(iter.currentTokensMean)} tokens`
               : undefined
           }
         />
@@ -170,7 +172,7 @@ export default async function IterationPage({
                   key={g.evalId}
                   group={g}
                   definition={evalsById.get(g.evalId) ?? null}
-                  primaryLabel={primaryLabel}
+                  currentLabel={currentLabel}
                   baselineLabel={baselineLabel}
                 />
               ))}
@@ -183,14 +185,14 @@ export default async function IterationPage({
             <CardHeader>
               <CardEyebrow>Resource usage</CardEyebrow>
               <CardTitle className="text-base">
-                Per-run averages ({primaryLabel})
+                Per-run averages ({currentLabel})
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <KV label="Tokens" value={fmtTokens(iter.primaryTokensMean)} />
+              <KV label="Tokens" value={fmtTokens(iter.currentTokensMean)} />
               <KV
                 label="Wall time"
-                value={fmtSeconds(iter.primaryTimeSecondsMean)}
+                value={fmtSeconds(iter.currentTimeSecondsMean)}
               />
               <div className="border-border my-2 border-t" />
               <KV
@@ -323,30 +325,26 @@ function KV({ label, value }: { label: string; value: string }) {
 type EvalBucket = {
   evalId: number;
   evalName: string | null;
-  primary: RunRow[];
+  current: RunRow[];
   baseline: RunRow[];
   other: RunRow[];
 };
 
-function groupRunsByEval(
-  runs: RunRow[],
-  primaryVariant: string | null,
-  baselineVariant: string | null,
-): EvalBucket[] {
+function groupRunsByEval(runs: RunRow[]): EvalBucket[] {
   const map = new Map<number, EvalBucket>();
   for (const r of runs) {
     if (!map.has(r.evalId)) {
       map.set(r.evalId, {
         evalId: r.evalId,
         evalName: r.evalName,
-        primary: [],
+        current: [],
         baseline: [],
         other: [],
       });
     }
     const bucket = map.get(r.evalId)!;
-    if (r.configuration === primaryVariant) bucket.primary.push(r);
-    else if (r.configuration === baselineVariant) bucket.baseline.push(r);
+    if (r.configuration === "current") bucket.current.push(r);
+    else if (r.configuration === "baseline") bucket.baseline.push(r);
     else bucket.other.push(r);
   }
   return [...map.values()].sort((a, b) => a.evalId - b.evalId);
@@ -366,21 +364,21 @@ const RUN_GRID =
 function EvalGroup({
   group,
   definition,
-  primaryLabel,
+  currentLabel,
   baselineLabel,
 }: {
   group: EvalBucket;
   definition: EvalDefinition | null;
-  primaryLabel: string;
+  currentLabel: string;
   baselineLabel: string;
 }) {
-  const primaryMean = evalBucketMean(group.primary);
+  const currentMean = evalBucketMean(group.current);
   const baselineMean = evalBucketMean(group.baseline);
   const bucketDelta =
-    primaryMean !== null && baselineMean !== null
-      ? primaryMean - baselineMean
+    currentMean !== null && baselineMean !== null
+      ? currentMean - baselineMean
       : null;
-  const rows = [...group.primary, ...group.baseline, ...group.other];
+  const rows = [...group.current, ...group.baseline, ...group.other];
 
   return (
     <Card>
@@ -393,7 +391,7 @@ function EvalGroup({
         </div>
         <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
           <span className="text-muted-foreground">
-            {primaryLabel}: {fmtPct(primaryMean)} · {baselineLabel}: {fmtPct(baselineMean)}
+            {currentLabel}: {fmtPct(currentMean)} · {baselineLabel}: {fmtPct(baselineMean)}
           </span>
           {bucketDelta !== null ? (
             <Badge
@@ -433,12 +431,7 @@ function EvalGroup({
           </div>
 
           {rows.map((r) => (
-            <RunRowDetails
-              key={r.id}
-              run={r}
-              primaryVariant={group.primary[0]?.configuration ?? null}
-              baselineVariant={group.baseline[0]?.configuration ?? null}
-            />
+            <RunRowDetails key={r.id} run={r} />
           ))}
         </div>
       </div>
@@ -446,19 +439,11 @@ function EvalGroup({
   );
 }
 
-function RunRowDetails({
-  run: r,
-  primaryVariant,
-  baselineVariant,
-}: {
-  run: RunRow;
-  primaryVariant: string | null;
-  baselineVariant: string | null;
-}) {
+function RunRowDetails({ run: r }: { run: RunRow }) {
   const hasExpectations = r.expectations.length > 0;
   const passedCount = r.expectations.filter((e) => e.passed).length;
-  const isPrimary = r.configuration === primaryVariant;
-  const isBaseline = r.configuration === baselineVariant;
+  const isCurrent = r.configuration === "current";
+  const isBaseline = r.configuration === "baseline";
   return (
     <details
       className={cn(
@@ -479,7 +464,7 @@ function RunRowDetails({
         )}
       >
         <span>
-          <Badge variant={isPrimary ? "outline" : isBaseline ? "secondary" : "secondary"}>
+          <Badge variant={isCurrent ? "outline" : isBaseline ? "secondary" : "secondary"}>
             {r.configuration}
           </Badge>
         </span>

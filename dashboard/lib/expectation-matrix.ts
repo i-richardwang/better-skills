@@ -17,33 +17,32 @@ export type ExpectationCellTally = {
 };
 
 export type ExpectationCell = {
-  primary: ExpectationCellTally;
+  current: ExpectationCellTally;
   baseline: ExpectationCellTally;
 };
 
-// Classification is computed from the *primary* track only — baseline is
+// Classification is computed from the *current* track only — baseline is
 // shown in cells but not used to label "regression / newly passing", since
-// the dashboard exists to track whether the skill (primary) improves.
+// the dashboard exists to track whether the live skill improves.
 export type ExpectationClassification =
-  | "regression" // primary passed in some prior iter, fails in latest
-  | "stuck_failing" // primary fails in latest AND every prior occurrence
-  | "flaky" // primary fraction in (0,1) somewhere; mixed history
-  | "newly_passing" // primary passes in latest, was less-than-perfect prior
+  | "regression" // current passed in some prior iter, fails in latest
+  | "stuck_failing" // current fails in latest AND every prior occurrence
+  | "flaky" // current fraction in (0,1) somewhere; mixed history
+  | "newly_passing" // current passes in latest, was less-than-perfect prior
   | "new" // first appearance is in latest
-  | "stable_pass" // primary passes everywhere it appears
+  | "stable_pass" // current passes everywhere it appears
   | "removed"; // present in some prior iter, absent in latest
 
 export type ExpectationMatrixIteration = {
   iterationNumber: number;
-  primaryVariant: string | null;
-  baselineVariant: string | null;
+  baselineResolved: string | null;
 };
 
 export type ExpectationMatrixRow = {
   text: string;
   classification: ExpectationClassification;
   // keyed by iterationNumber. Missing = expectation didn't appear at all
-  // for that iteration (neither variant graded it).
+  // for that iteration (neither config graded it).
   cells: Map<number, ExpectationCell>;
 };
 
@@ -87,24 +86,22 @@ function classify(
   if (latestIter === undefined) return "stable_pass";
 
   const latestCell = cells.get(latestIter);
-  const latestPrimary = latestCell?.primary;
-  const inLatest = latestPrimary !== undefined && latestPrimary.total > 0;
+  const latestCurrent = latestCell?.current;
+  const inLatest = latestCurrent !== undefined && latestCurrent.total > 0;
 
-  // Collect prior primary tallies (only iterations where primary actually
-  // graded this expectation — skip iters where it was absent).
-  const priorPrimary: ExpectationCellTally[] = [];
+  const priorCurrent: ExpectationCellTally[] = [];
   for (const it of itersNewestFirst.slice(1)) {
     const cell = cells.get(it.iterationNumber);
-    if (cell && cell.primary.total > 0) priorPrimary.push(cell.primary);
+    if (cell && cell.current.total > 0) priorCurrent.push(cell.current);
   }
 
   if (!inLatest) {
-    return priorPrimary.length > 0 ? "removed" : "removed";
+    return priorCurrent.length > 0 ? "removed" : "removed";
   }
-  if (priorPrimary.length === 0) return "new";
+  if (priorCurrent.length === 0) return "new";
 
-  const latestFraction = latestPrimary!.passed / latestPrimary!.total;
-  const priorFractions = priorPrimary.map((c) => c.passed / c.total);
+  const latestFraction = latestCurrent!.passed / latestCurrent!.total;
+  const priorFractions = priorCurrent.map((c) => c.passed / c.total);
   const allPriorPass = priorFractions.every((f) => f === 1);
   const allPriorFail = priorFractions.every((f) => f === 0);
 
@@ -132,16 +129,14 @@ const CLASS_ORDER: Record<ExpectationClassification, number> = {
 export function buildExpectationMatrix(
   iters: EvalIterationResult[],
 ): ExpectationMatrix {
-  // iters arrives newest-first from getSkillEvalDetail; preserve that order.
   const iterations: ExpectationMatrixIteration[] = iters.map((it) => ({
     iterationNumber: it.iterationNumber,
-    primaryVariant: it.primaryVariant,
-    baselineVariant: it.baselineVariant,
+    baselineResolved: it.baselineResolved,
   }));
 
   const allTexts = new Set<string>();
   for (const it of iters) {
-    for (const r of [...it.primaryRuns, ...it.baselineRuns]) {
+    for (const r of [...it.currentRuns, ...it.baselineRuns]) {
       for (const e of r.expectations) allTexts.add(e.text);
     }
   }
@@ -151,7 +146,7 @@ export function buildExpectationMatrix(
     const cells = new Map<number, ExpectationCell>();
     for (const it of iters) {
       cells.set(it.iterationNumber, {
-        primary: tally(text, it.primaryRuns),
+        current: tally(text, it.currentRuns),
         baseline: tally(text, it.baselineRuns),
       });
     }
