@@ -5,7 +5,7 @@ Two JSON files per skill, both validated by `scripts/config.py`:
 - `<skill>/evals.json` — functional eval cases + baseline declaration (consumed by `better-skills run/iterate`)
 - `<skill>/triggers.json` — trigger eval queries (consumed by `better-skills trigger-eval/trigger-loop`)
 
-Use `python -m scripts.cli init <skill-path>` to scaffold starter templates.
+Use `better-skills init <skill-path>` to scaffold starter templates.
 
 ## evals.json
 

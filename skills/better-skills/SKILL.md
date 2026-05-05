@@ -195,20 +195,18 @@ Every iteration runs each case under exactly two configurations: `current` (the 
 
 ### Step 1: Run one full iteration with `better-skills iterate`
 
-`scripts/cli.py` exposes a single `better-skills` CLI with one subcommand per pipeline stage. `iterate` is the default — it runs all executors + graders in parallel, writes a per-iteration manifest, dumps the live skill into `iteration-N/skill-state/` for future-iteration comparisons, aggregates into `benchmark.json`/`benchmark.md`, and launches the viewer in the background — all from one command.
+The `better-skills` CLI exposes one subcommand per pipeline stage. `iterate` is the default — it runs all executors + graders in parallel, writes a per-iteration manifest, dumps the live skill into `iteration-N/skill-state/` for future-iteration comparisons, aggregates into `benchmark.json`/`benchmark.md`, and launches the viewer in the background — all from one command.
 
 Before launching, ensure `<skill>/evals.json` exists with `defaults` + `cases` (see `references/evals-schema.md` for the schema, or `better-skills init <skill-path>` to scaffold a starting template).
 
 **Invocation** — launch as a **background Bash tool call** (`run_in_background: true`) so you can draft assertions while it runs:
 
 ```bash
-python -m scripts.cli iterate \
+better-skills iterate \
   --skill-path <path-to-skill> \
   --workspace <skill-name>-workspace \
   --iteration <N>
 ```
-
-Run it **from the better-skills directory** (so `python -m scripts.*` resolves).
 
 **Baseline modes** are declared via `default_baseline` in evals.json (overridable per-invocation with `--baseline`). Grammar: `none | previous | iteration-N | path:/abs/path`.
 - **Creating a new skill / first iteration**: `default_baseline: "previous"` is the right default — iteration 1 has no previous, so it auto-degrades to `none` (bare model, no skill). Iteration 2+ then automatically compares against iteration N-1's `skill-state/` snapshot.
@@ -251,7 +249,7 @@ Update `evals.json` with the assertions once drafted (do NOT hand-edit the per-r
 If you launched `iterate` with `--phase executor` to interleave assertion-drafting, kick off grading once assertions are ready:
 
 ```bash
-python -m scripts.cli iterate \
+better-skills iterate \
   --skill-path <path-to-skill> \
   --workspace <skill-name>-workspace \
   --iteration <N> \
@@ -335,13 +333,13 @@ kill <viewer_pid> 2>/dev/null
 
 `iterate` is a thin orchestrator over `better-skills`'s other subcommands. They stay supported for finer control:
 
-- **Scaffold a skill's eval configs**: `python -m scripts.cli init <skill-path>` — writes a starter `evals.json` + `triggers.json`.
-- **Just re-run the executor**: `python -m scripts.cli run --skill-path … --workspace … --iteration N --phase executor`. Use `--resume` to skip runs whose transcript already shows success.
-- **Just re-grade** without re-executing (e.g., after editing assertions): `python -m scripts.cli run … --phase grader --resume`. Already-graded runs are skipped.
-- **Re-aggregate** an existing iteration: `python -m scripts.cli aggregate <workspace>/iteration-N`. The iteration's `manifest.json` is required.
-- **Manual dashboard upload**: `python -m scripts.upload_dashboard <workspace>/iteration-N --skill-name <name> --iteration N --skill-path <path>`. Requires `SKILL_DASHBOARD_URL` + `SKILL_DASHBOARD_TOKEN` env or `--dashboard-url`/`--token` flags.
-- **Standalone viewer**: `python -m scripts.cli view <workspace>/iteration-N` — same as what `iterate` runs in the background.
-- **Trigger pipeline** (test description triggering): `python -m scripts.cli trigger-loop --skill-path <path>` runs eval+improve loop. Underlying subcommands `trigger-eval` and `trigger-improve` are also exposed.
+- **Scaffold a skill's eval configs**: `better-skills init <skill-path>` — writes a starter `evals.json` + `triggers.json`.
+- **Just re-run the executor**: `better-skills run --skill-path … --workspace … --iteration N --phase executor`. Use `--resume` to skip runs whose transcript already shows success.
+- **Just re-grade** without re-executing (e.g., after editing assertions): `better-skills run … --phase grader --resume`. Already-graded runs are skipped.
+- **Re-aggregate** an existing iteration: `better-skills aggregate <workspace>/iteration-N`. The iteration's `manifest.json` is required.
+- **Manual dashboard upload**: `better-skills upload <workspace>/iteration-N --skill-name <name> --iteration N --skill-path <path>`. Requires `SKILL_DASHBOARD_URL` + `SKILL_DASHBOARD_TOKEN` env or `--dashboard-url`/`--token` flags.
+- **Standalone viewer**: `better-skills view <workspace>/iteration-N` — same as what `iterate` runs in the background.
+- **Trigger pipeline** (test description triggering): `better-skills trigger-loop --skill-path <path>` runs eval+improve loop. Underlying subcommands `trigger-eval` and `trigger-improve` are also exposed.
 
 The `manifest.json` schema and `run_status.json` lifecycle are documented in `references/manifest-schema.md`. The new `evals.json` schema is in `references/evals-schema.md`.
 
@@ -368,7 +366,7 @@ This task is pretty important (we are trying to create billions a year in econom
 After improving the skill:
 
 1. Apply your improvements to the skill
-2. Rerun all test cases into a new `iteration-<N+1>/` directory: `python -m scripts.cli iterate --skill-path … --workspace … --iteration <N+1> --previous-iteration <N>`. With `default_baseline: "previous"` (the recommended default), iteration `<N+1>` automatically compares against iteration `<N>`'s `skill-state/` snapshot — no manual baseline management. To compare against a different prior iteration for one run, pass `--baseline iteration-<K>`.
+2. Rerun all test cases into a new `iteration-<N+1>/` directory: `better-skills iterate --skill-path … --workspace … --iteration <N+1> --previous-iteration <N>`. With `default_baseline: "previous"` (the recommended default), iteration `<N+1>` automatically compares against iteration `<N>`'s `skill-state/` snapshot — no manual baseline management. To compare against a different prior iteration for one run, pass `--baseline iteration-<K>`.
 3. The viewer launches automatically with the previous iteration as the diff target
 4. Wait for the user to review and tell you they're done
 5. Read the new feedback, improve again, repeat
@@ -437,8 +435,8 @@ Tell the user: "This will take some time — I'll run the optimization loop in t
 Save the eval set to the workspace, then run in the background:
 
 ```bash
-python -m scripts.run_loop \
-  --eval-set <path-to-trigger-eval.json> \
+better-skills trigger-loop \
+  --triggers-json <path-to-trigger-eval.json> \
   --skill-path <path-to-skill> \
   --model <model-id-powering-this-session> \
   --max-iterations 5 \
@@ -468,7 +466,7 @@ Take `best_description` from the JSON output and update the skill's SKILL.md fro
 Check whether you have access to the `present_files` tool. If you don't, skip this step. If you do, package the skill and present the .skill file to the user:
 
 ```bash
-python -m scripts.package_skill <path/to/skill-folder>
+better-skills package <path/to/skill-folder>
 ```
 
 After packaging, direct the user to the resulting `.skill` file path so they can install it.

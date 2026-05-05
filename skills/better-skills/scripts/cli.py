@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -30,9 +31,11 @@ from . import (
     aggregate_benchmark,
     improve_description,
     iterate,
+    package_skill,
     run_eval,
     run_functional_eval,
     run_loop,
+    upload_dashboard,
 )
 from .config import (
     CaseConfig,
@@ -218,6 +221,38 @@ def cmd_trigger_loop(args: argparse.Namespace) -> dict:
     return run_loop.run_from_cli(args)
 
 
+# --- package ----------------------------------------------------------------
+
+
+def cmd_package(args: argparse.Namespace) -> dict:
+    result = package_skill.package_skill(str(args.skill_path), args.output_dir)
+    if not result:
+        raise SystemExit(1)
+    return {"status": "ok", "skill_file": result}
+
+
+# --- upload -----------------------------------------------------------------
+
+
+def cmd_upload(args: argparse.Namespace) -> dict:
+    iteration = args.iteration
+    if iteration is None:
+        iteration = upload_dashboard.infer_iteration_number(args.benchmark_dir)
+    if iteration is None:
+        raise SystemExit(
+            f"Could not infer iteration number from {args.benchmark_dir.name}; pass --iteration."
+        )
+    if not args.dashboard_url or not args.token:
+        raise SystemExit(
+            "Missing --dashboard-url / --token (or SKILL_DASHBOARD_URL / SKILL_DASHBOARD_TOKEN env)."
+        )
+    payload = upload_dashboard.build_payload(
+        args.benchmark_dir, args.skill_name, iteration, args.skill_path
+    )
+    result = upload_dashboard.upload(args.dashboard_url, args.token, payload)
+    return {"status": "ok", **(result if isinstance(result, dict) else {})}
+
+
 # --- main -------------------------------------------------------------------
 
 
@@ -326,6 +361,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--report", default="auto")
     sp.add_argument("--results-dir", default=None)
     sp.set_defaults(handler=cmd_trigger_loop)
+
+    # package
+    sp = sub.add_parser("package", help="Bundle a skill folder into a .skill archive.")
+    sp.add_argument("skill_path", type=Path)
+    sp.add_argument("--output-dir", default=None,
+                    help="Where to write the .skill file (default: alongside skill folder).")
+    sp.set_defaults(handler=cmd_package)
+
+    # upload
+    sp = sub.add_parser("upload", help="Upload an iteration's results to the dashboard.")
+    sp.add_argument("benchmark_dir", type=Path, help="Path to iteration-N directory")
+    sp.add_argument("--skill-name", required=True)
+    sp.add_argument("--iteration", type=int, default=None,
+                    help="Iteration number (default: inferred from benchmark_dir name).")
+    sp.add_argument("--skill-path", type=Path, default=None,
+                    help="Path to the skill directory (for SKILL.md snapshot + git SHA).")
+    sp.add_argument("--dashboard-url", default=os.environ.get("SKILL_DASHBOARD_URL"))
+    sp.add_argument("--token", default=os.environ.get("SKILL_DASHBOARD_TOKEN"))
+    sp.set_defaults(handler=cmd_upload)
 
     return p
 

@@ -100,12 +100,13 @@ bun run start    # serve the production build
 
 ## Uploading from the CLI
 
-`better-skills iterate` finishes a run, then `upload_dashboard.py`
-authenticates with `Authorization: Bearer ${DASHBOARD_UPLOAD_TOKEN}` and
-POSTs the iteration to `/api/uploads`. Set both env vars (`DATABASE_URL`
-and `DASHBOARD_UPLOAD_TOKEN`) on the dashboard host, and on the CLI host
-set `DASHBOARD_UPLOAD_TOKEN` (matching value) plus the dashboard's URL —
-see `scripts/upload_dashboard.py` for the precise contract.
+`better-skills iterate` finishes a run and silently posts the iteration
+to `/api/uploads` with `Authorization: Bearer ${DASHBOARD_UPLOAD_TOKEN}`.
+For manual one-off uploads use `better-skills upload <iteration-dir>
+--skill-name <name> --iteration N --skill-path <path>`. Set both env
+vars (`DATABASE_URL` and `DASHBOARD_UPLOAD_TOKEN`) on the dashboard
+host, and on the CLI host set `SKILL_DASHBOARD_TOKEN` (matching value)
+plus `SKILL_DASHBOARD_URL`.
 
 ## Operational notes
 

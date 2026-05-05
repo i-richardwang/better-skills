@@ -21,11 +21,8 @@ The original `anthropics/skills` is a curated catalogue of demonstration skills 
 
 # Installation
 
-Install the `better-skills` CLI from the skill folder:
-
 ```bash
-cd skills/better-skills
-pip install -e .
+pip install better-skills
 
 # Now available on PATH:
 better-skills --help
