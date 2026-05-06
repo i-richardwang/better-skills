@@ -160,7 +160,9 @@ def resolve_baseline(
     raise ValueError(f"unhandled baseline spec: {spec}")
 
 
-def dump_skill_state(skill_path: Path, iteration_dir: Path) -> Path:
+def dump_skill_state(
+    skill_path: Path, iteration_dir: Path, workspace: Path | None = None
+) -> Path:
     """Copy the live skill into iteration-N/skill-state/.
 
     Called at iterate-end so iteration N's snapshot reflects the version that
@@ -170,11 +172,26 @@ def dump_skill_state(skill_path: Path, iteration_dir: Path) -> Path:
     If the destination already exists (e.g. user re-ran the same iteration),
     we wipe and re-copy — the live skill is the source of truth for "what was
     tested in this iteration"; staleness here would mislead future baselines.
+
+    When `workspace` is nested inside `skill_path` (legitimate for users who
+    co-locate evals + workspace in a shell directory next to the real skill),
+    we ignore the workspace subtree during copytree to avoid recursing into
+    the iteration directory we just wrote.
     """
     state_dir = iteration_dir / "skill-state"
     if state_dir.exists():
         shutil.rmtree(state_dir)
-    shutil.copytree(skill_path, state_dir)
+
+    skill_resolved = skill_path.resolve()
+    workspace_resolved = workspace.resolve() if workspace else None
+
+    def _ignore(dirpath: str, names: list[str]) -> list[str]:
+        if workspace_resolved is None:
+            return []
+        d = Path(dirpath).resolve()
+        return [n for n in names if (d / n).resolve() == workspace_resolved]
+
+    shutil.copytree(skill_resolved, state_dir, ignore=_ignore)
     return state_dir
 
 
@@ -1079,7 +1096,7 @@ def run_all(
     # skill-state should reflect the executor run that produced the transcripts.
     if phase == "all":
         try:
-            dump_skill_state(skill_path, iteration_dir)
+            dump_skill_state(skill_path, iteration_dir, workspace=workspace)
             print(f"[snapshot] dumped skill-state to {iteration_dir / 'skill-state'}",
                   file=sys.stderr, flush=True)
         except (OSError, shutil.Error) as e:

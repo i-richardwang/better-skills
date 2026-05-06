@@ -46,6 +46,7 @@ from .config import (
     TriggersConfig,
     find_evals_config,
     validate_baseline_spec,
+    validate_skill_workspace,
 )
 
 
@@ -126,6 +127,7 @@ def cmd_init(args: argparse.Namespace) -> dict:
 def cmd_run(args: argparse.Namespace) -> dict:
     skill_path = Path(args.skill_path).resolve()
     workspace = Path(args.workspace).resolve()
+    validate_skill_workspace(skill_path, workspace)
     evals_json = (
         Path(args.evals_json).resolve() if args.evals_json
         else find_evals_config(skill_path).resolve()
@@ -245,8 +247,15 @@ def cmd_upload(args: argparse.Namespace) -> dict:
         raise SystemExit(
             "Missing --dashboard-url / --token (or SKILL_DASHBOARD_URL / SKILL_DASHBOARD_TOKEN env)."
         )
+    evals_json = Path(args.evals_json).resolve() if args.evals_json else None
+    workspace = Path(args.workspace).resolve() if args.workspace else None
     payload = upload_dashboard.build_payload(
-        args.benchmark_dir, args.skill_name, iteration, args.skill_path
+        args.benchmark_dir,
+        args.skill_name,
+        iteration,
+        args.skill_path,
+        evals_json,
+        workspace,
     )
     result = upload_dashboard.upload(args.dashboard_url, args.token, payload)
     return {"status": "ok", **(result if isinstance(result, dict) else {})}
@@ -375,6 +384,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Iteration number (default: inferred from benchmark_dir name).")
     sp.add_argument("--skill-path", type=Path, default=None,
                     help="Path to the skill directory (for SKILL.md snapshot + git SHA).")
+    sp.add_argument("--evals-json", default=None,
+                    help="Path to the evals config used (default: <skill>/evals.json). "
+                         "Required when the file is not named evals.json or lives outside the skill dir.")
+    sp.add_argument("--workspace", default=None,
+                    help="Workspace directory (only needed when nested inside --skill-path; "
+                         "pruned from the uploaded skill_files snapshot to keep payload bounded).")
     sp.add_argument("--dashboard-url", default=os.environ.get("SKILL_DASHBOARD_URL"))
     sp.add_argument("--token", default=os.environ.get("SKILL_DASHBOARD_TOKEN"))
     sp.set_defaults(handler=cmd_upload)

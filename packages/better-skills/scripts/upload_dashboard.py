@@ -4,13 +4,13 @@ Upload a benchmark iteration to the skill dashboard.
 
 Can be invoked two ways:
 
-1. As a post-hook inside aggregate_benchmark.py — call `upload_from_env(...)`,
+1. As a post-hook inside iterate.run_iteration — call `upload_from_env(...)`,
    which reads `SKILL_DASHBOARD_URL` / `SKILL_DASHBOARD_TOKEN` from the environment
    and fails soft on any error (never raises, never blocks the main workflow).
 
 2. Manual CLI — explicit upload of an already-aggregated benchmark directory
    via `better-skills upload <iteration-dir> --skill-name my-skill
-   --iteration 3 --skill-path path/to/skill`.
+   --iteration 3 --skill-path path/to/skill [--evals-json path/to/evals.json]`.
 
 The payload shape matches the `POST /api/uploads` contract:
 benchmark.json + per-run grading.json + optional SKILL.md snapshot + git SHA + hostname.
@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-from .config import ConfigError, load_evals_config
+from .config import ConfigError, find_evals_config, load_evals_config
 
 
 # --- Skill file scanner -----------------------------------------------------
@@ -72,21 +72,33 @@ def _is_secret_name(name: str) -> bool:
     return name.startswith(_SECRET_PREFIXES) or name.endswith(_SECRET_SUFFIXES)
 
 
-def _collect_skill_files(skill_path: Path) -> tuple[dict[str, str], list[str]]:
+def _collect_skill_files(
+    skill_path: Path, workspace: Optional[Path] = None
+) -> tuple[dict[str, str], list[str]]:
     """Walk skill_path, return (files_map, warnings).
 
     Keys are forward-slash relative paths. Symlinks are not followed. Three
     caps apply (per-file, total, entry count); when any is hit we stop and
     record a warning rather than failing the upload.
+
+    When `workspace` is nested inside `skill_path` (shell-directory layouts),
+    we prune the workspace subtree from os.walk so iteration artifacts don't
+    bloat the payload.
     """
     files: dict[str, str] = {}
     warnings: list[str] = []
     total_bytes = 0
     root = skill_path.resolve()
+    workspace_resolved = workspace.resolve() if workspace else None
 
     # Sorted traversal so size-cap truncation is deterministic.
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if d not in _EXCLUDED_DIRS)
+        d = Path(dirpath).resolve()
+        dirnames[:] = sorted(
+            n for n in dirnames
+            if n not in _EXCLUDED_DIRS
+            and (workspace_resolved is None or (d / n).resolve() != workspace_resolved)
+        )
         for name in sorted(filenames):
             if name in _EXCLUDED_FILES or _is_secret_name(name):
                 continue
@@ -204,15 +216,13 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
     return runs
 
 
-def _read_evals_definition(skill_path: Path) -> Optional[dict]:
-    """Read evals.json for upload as iteration snapshot. Lets the dashboard
-    render the actual case prompts alongside results.
+def _read_evals_definition(evals_path: Optional[Path]) -> Optional[dict]:
+    """Read the evals config used for this iteration as the dashboard snapshot.
 
     Goes through the pydantic loader so the upload payload is the schema's
     canonical shape — never raw user fields outside the declared schema.
     Returns None on any failure; upload still proceeds without the field."""
-    evals_path = skill_path / "evals.json"
-    if not evals_path.exists():
+    if evals_path is None or not evals_path.exists():
         return None
     try:
         return load_evals_config(evals_path).model_dump(exclude_none=True)
@@ -226,6 +236,8 @@ def build_payload(
     skill_name: str,
     iteration_number: int,
     skill_path: Optional[Path],
+    evals_json: Optional[Path] = None,
+    workspace: Optional[Path] = None,
 ) -> dict:
     benchmark_path = benchmark_dir / "benchmark.json"
     if not benchmark_path.exists():
@@ -251,10 +263,13 @@ def build_payload(
         sha = _get_git_sha(skill_path)
         if sha:
             payload["git_commit_sha"] = sha
-        evals_def = _read_evals_definition(skill_path)
+        # Prefer the explicit evals_json the runner used; fall back to the
+        # default location so unchanged callers still work.
+        evals_path = evals_json if evals_json is not None else find_evals_config(skill_path)
+        evals_def = _read_evals_definition(evals_path)
         if evals_def is not None:
             payload["evals_definition"] = evals_def
-        files, file_warnings = _collect_skill_files(skill_path)
+        files, file_warnings = _collect_skill_files(skill_path, workspace=workspace)
         if files:
             payload["skill_files"] = files
         for w in file_warnings:
@@ -284,6 +299,8 @@ def upload_from_env(
     skill_name: str,
     iteration_number: int,
     skill_path: Optional[Path] = None,
+    evals_json: Optional[Path] = None,
+    workspace: Optional[Path] = None,
 ) -> bool:
     """Fail-soft upload: returns True on success, False on skip/failure. Never raises."""
     if os.environ.get("SKILL_DASHBOARD_DISABLED"):
@@ -297,7 +314,9 @@ def upload_from_env(
         return False
 
     try:
-        payload = build_payload(benchmark_dir, skill_name, iteration_number, skill_path)
+        payload = build_payload(
+            benchmark_dir, skill_name, iteration_number, skill_path, evals_json, workspace
+        )
         result = upload(url, token, payload)
         ingested = result.get("runs_ingested", 0) if isinstance(result, dict) else 0
         print(

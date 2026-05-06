@@ -322,6 +322,22 @@ def find_evals_config(skill_path: Path) -> Path:
     return skill_path / "evals.json"
 
 
+def validate_skill_workspace(skill_path: Path, workspace: Path) -> None:
+    """Reject workspace == skill_path. dump_skill_state would copytree the live
+    skill into <iteration_dir>/skill-state/, and if iteration_dir lives directly
+    under skill_path, copytree recurses through the destination it just wrote.
+
+    Nesting workspace inside skill_path is allowed — the runner and dashboard
+    uploader both prune the workspace subtree to keep that case sane.
+    """
+    if skill_path.resolve() == workspace.resolve():
+        raise ConfigError(
+            f"--workspace must not be the same directory as --skill-path "
+            f"({skill_path}). Pick a workspace path that differs (a sibling or "
+            f"a sub-directory like {skill_path}/workspace works)."
+        )
+
+
 def find_triggers_config(skill_path: Path) -> Path:
     """Default path for a skill's triggers.json: <skill>/triggers.json."""
     return skill_path / "triggers.json"

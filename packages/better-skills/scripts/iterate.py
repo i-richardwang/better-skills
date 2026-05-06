@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from . import aggregate_benchmark, run_functional_eval
-from .config import find_evals_config
+from .config import find_evals_config, validate_skill_workspace
 from .upload_dashboard import upload_from_env
 
 
@@ -75,6 +75,7 @@ def run_iteration(args: argparse.Namespace) -> dict:
     """Execute one full iteration. Returns the structured summary dict."""
     skill_path = Path(args.skill_path).resolve()
     workspace = Path(args.workspace).resolve()
+    validate_skill_workspace(skill_path, workspace)
     skill_name = args.skill_name or skill_path.name
     evals_json = (
         Path(args.evals_json).resolve() if args.evals_json
@@ -121,6 +122,8 @@ def run_iteration(args: argparse.Namespace) -> dict:
                 skill_name=skill_name,
                 iteration_number=args.iteration,
                 skill_path=skill_path,
+                evals_json=evals_json,
+                workspace=workspace,
             )
         except Exception as e:
             print(f"[dashboard] hook skipped: {e}", file=sys.stderr)
