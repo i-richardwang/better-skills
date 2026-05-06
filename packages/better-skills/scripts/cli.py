@@ -248,14 +248,12 @@ def cmd_upload(args: argparse.Namespace) -> dict:
             "Missing --dashboard-url / --token (or SKILL_DASHBOARD_URL / SKILL_DASHBOARD_TOKEN env)."
         )
     evals_json = Path(args.evals_json).resolve() if args.evals_json else None
-    workspace = Path(args.workspace).resolve() if args.workspace else None
     payload = upload_dashboard.build_payload(
         args.benchmark_dir,
         args.skill_name,
         iteration,
         args.skill_path,
         evals_json,
-        workspace,
     )
     result = upload_dashboard.upload(args.dashboard_url, args.token, payload)
     return {"status": "ok", **(result if isinstance(result, dict) else {})}
@@ -387,9 +385,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--evals-json", default=None,
                     help="Path to the evals config used (default: <skill>/evals.json). "
                          "Required when the file is not named evals.json or lives outside the skill dir.")
-    sp.add_argument("--workspace", default=None,
-                    help="Workspace directory (only needed when nested inside --skill-path; "
-                         "pruned from the uploaded skill_files snapshot to keep payload bounded).")
     sp.add_argument("--dashboard-url", default=os.environ.get("SKILL_DASHBOARD_URL"))
     sp.add_argument("--token", default=os.environ.get("SKILL_DASHBOARD_TOKEN"))
     sp.set_defaults(handler=cmd_upload)

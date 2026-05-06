@@ -72,33 +72,21 @@ def _is_secret_name(name: str) -> bool:
     return name.startswith(_SECRET_PREFIXES) or name.endswith(_SECRET_SUFFIXES)
 
 
-def _collect_skill_files(
-    skill_path: Path, workspace: Optional[Path] = None
-) -> tuple[dict[str, str], list[str]]:
+def _collect_skill_files(skill_path: Path) -> tuple[dict[str, str], list[str]]:
     """Walk skill_path, return (files_map, warnings).
 
     Keys are forward-slash relative paths. Symlinks are not followed. Three
     caps apply (per-file, total, entry count); when any is hit we stop and
     record a warning rather than failing the upload.
-
-    When `workspace` is nested inside `skill_path` (shell-directory layouts),
-    we prune the workspace subtree from os.walk so iteration artifacts don't
-    bloat the payload.
     """
     files: dict[str, str] = {}
     warnings: list[str] = []
     total_bytes = 0
     root = skill_path.resolve()
-    workspace_resolved = workspace.resolve() if workspace else None
 
     # Sorted traversal so size-cap truncation is deterministic.
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        d = Path(dirpath).resolve()
-        dirnames[:] = sorted(
-            n for n in dirnames
-            if n not in _EXCLUDED_DIRS
-            and (workspace_resolved is None or (d / n).resolve() != workspace_resolved)
-        )
+        dirnames[:] = sorted(d for d in dirnames if d not in _EXCLUDED_DIRS)
         for name in sorted(filenames):
             if name in _EXCLUDED_FILES or _is_secret_name(name):
                 continue
@@ -237,7 +225,6 @@ def build_payload(
     iteration_number: int,
     skill_path: Optional[Path],
     evals_json: Optional[Path] = None,
-    workspace: Optional[Path] = None,
 ) -> dict:
     benchmark_path = benchmark_dir / "benchmark.json"
     if not benchmark_path.exists():
@@ -269,7 +256,7 @@ def build_payload(
         evals_def = _read_evals_definition(evals_path)
         if evals_def is not None:
             payload["evals_definition"] = evals_def
-        files, file_warnings = _collect_skill_files(skill_path, workspace=workspace)
+        files, file_warnings = _collect_skill_files(skill_path)
         if files:
             payload["skill_files"] = files
         for w in file_warnings:
@@ -300,7 +287,6 @@ def upload_from_env(
     iteration_number: int,
     skill_path: Optional[Path] = None,
     evals_json: Optional[Path] = None,
-    workspace: Optional[Path] = None,
 ) -> bool:
     """Fail-soft upload: returns True on success, False on skip/failure. Never raises."""
     if os.environ.get("SKILL_DASHBOARD_DISABLED"):
@@ -315,7 +301,7 @@ def upload_from_env(
 
     try:
         payload = build_payload(
-            benchmark_dir, skill_name, iteration_number, skill_path, evals_json, workspace
+            benchmark_dir, skill_name, iteration_number, skill_path, evals_json
         )
         result = upload(url, token, payload)
         ingested = result.get("runs_ingested", 0) if isinstance(result, dict) else 0

@@ -69,12 +69,12 @@ def _isolated_cwd(run_dir: Path) -> Path:
     return iso
 
 
-def _resolve_case_file(file_ref: str, skill_path: Path) -> str:
-    """Resolve case.files entries to absolute paths against the skill dir."""
+def _resolve_case_file(file_ref: str, evals_json: Path) -> str:
+    """Resolve case.files entries to absolute paths against evals.json's dir."""
     p = Path(file_ref)
     if p.is_absolute():
         return str(p)
-    return str((skill_path / p).resolve())
+    return str((evals_json.parent / p).resolve())
 
 
 def _env(overrides: dict | None = None) -> dict:
@@ -160,9 +160,7 @@ def resolve_baseline(
     raise ValueError(f"unhandled baseline spec: {spec}")
 
 
-def dump_skill_state(
-    skill_path: Path, iteration_dir: Path, workspace: Path | None = None
-) -> Path:
+def dump_skill_state(skill_path: Path, iteration_dir: Path) -> Path:
     """Copy the live skill into iteration-N/skill-state/.
 
     Called at iterate-end so iteration N's snapshot reflects the version that
@@ -173,25 +171,13 @@ def dump_skill_state(
     we wipe and re-copy — the live skill is the source of truth for "what was
     tested in this iteration"; staleness here would mislead future baselines.
 
-    When `workspace` is nested inside `skill_path` (legitimate for users who
-    co-locate evals + workspace in a shell directory next to the real skill),
-    we ignore the workspace subtree during copytree to avoid recursing into
-    the iteration directory we just wrote.
+    Safe because validate_skill_workspace rejects workspace inside skill_path,
+    so iteration_dir is never under skill_path and copytree cannot recurse.
     """
     state_dir = iteration_dir / "skill-state"
     if state_dir.exists():
         shutil.rmtree(state_dir)
-
-    skill_resolved = skill_path.resolve()
-    workspace_resolved = workspace.resolve() if workspace else None
-
-    def _ignore(dirpath: str, names: list[str]) -> list[str]:
-        if workspace_resolved is None:
-            return []
-        d = Path(dirpath).resolve()
-        return [n for n in names if (d / n).resolve() == workspace_resolved]
-
-    shutil.copytree(skill_resolved, state_dir, ignore=_ignore)
+    shutil.copytree(skill_path, state_dir)
     return state_dir
 
 
@@ -660,6 +646,7 @@ def plan_runs(
     workspace: Path,
     iteration: int,
     skill_path: Path,
+    evals_json: Path,
     baseline_path: Path | None,
     default_timeout: int,
     runs_per_config: int,
@@ -671,10 +658,10 @@ def plan_runs(
         eval_dir = iteration_dir / f"eval-{case.id}"
         eval_dir.mkdir(parents=True, exist_ok=True)
 
-        prompt = config.resolve_prompt(case, skill_path)
+        prompt = config.resolve_prompt(case, evals_json)
         eval_name = case.name or f"eval-{case.id}"
         expectations = list(case.expectations)
-        resolved_files = [_resolve_case_file(f, skill_path) for f in case.files]
+        resolved_files = [_resolve_case_file(f, evals_json) for f in case.files]
 
         metadata = {
             "eval_id": case.id,
@@ -985,7 +972,7 @@ def run_all(
     per_run_setup = config.defaults.per_run_setup
     setup_script_path: Path | None = None
     if per_run_setup and per_run_setup.script:
-        setup_script_path = (skill_path / per_run_setup.script).resolve()
+        setup_script_path = (evals_json.parent / per_run_setup.script).resolve()
         if not setup_script_path.exists():
             raise FileNotFoundError(
                 f"per_run_setup.script not found: {setup_script_path} "
@@ -1004,6 +991,7 @@ def run_all(
         workspace=workspace,
         iteration=iteration,
         skill_path=skill_path,
+        evals_json=evals_json,
         baseline_path=baseline_path,
         default_timeout=default_timeout,
         runs_per_config=runs_per_config,
@@ -1096,7 +1084,7 @@ def run_all(
     # skill-state should reflect the executor run that produced the transcripts.
     if phase == "all":
         try:
-            dump_skill_state(skill_path, iteration_dir, workspace=workspace)
+            dump_skill_state(skill_path, iteration_dir)
             print(f"[snapshot] dumped skill-state to {iteration_dir / 'skill-state'}",
                   file=sys.stderr, flush=True)
         except (OSError, shutil.Error) as e:

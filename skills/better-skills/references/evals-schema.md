@@ -37,9 +37,9 @@ iterations can compare against it.
       "id": 1,                                 // stable int; eval-<id>/ dir name
       "name": "make a chart",                  // optional human label
       "prompt": "Create a bar chart from ...", // inline OR prompt_file (XOR)
-      "prompt_file": null,                     // path relative to skill dir
+      "prompt_file": null,                     // path relative to evals.json's dir
       "files": [                               // file paths mentioned in prompt
-        "data.csv"                             // relative paths resolve to <skill>/data.csv;
+        "data.csv"                             // relative paths resolve to <evals.json dir>/data.csv;
                                                // absolute paths pass through unchanged.
                                                // (must already exist; not materialized)
       ],
@@ -124,8 +124,9 @@ between cases.
 
 For short inline prompts, use `prompt`. For multi-paragraph prompts (long
 markdown bodies, embedded code blocks), put the prompt in its own `.md` file
-and reference it via `prompt_file` (path is relative to the skill dir). This
-keeps evals.json readable and lets prompts be edited like normal markdown.
+and reference it via `prompt_file` (path is relative to evals.json's
+directory). This keeps evals.json readable and lets prompts be edited like
+normal markdown.
 
 ```jsonc
 {
@@ -258,8 +259,8 @@ when the run finishes (even on crash, via `finally`).
 
 #### `per_run_setup.script` — per-run setup hook
 
-Path relative to the skill dir; must be executable. Invoked before each
-executor subprocess with:
+Path relative to evals.json's directory; must be executable. Invoked before
+each executor subprocess with:
 
 - **cwd** = the run's directory (`iteration-N/eval-X/<config>/run-K/`)
 - **env** = the run's full environment (shell env + pool slot + `case.env`)

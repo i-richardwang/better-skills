@@ -226,12 +226,12 @@ class EvalsConfig(BaseModel):
             raise ValueError(f"duplicate case ids: {sorted(set(dups))}")
         return self
 
-    def resolve_prompt(self, case: CaseConfig, skill_path: Path) -> str:
-        """Read the case's prompt — inline or from prompt_file relative to skill_path."""
+    def resolve_prompt(self, case: CaseConfig, evals_json: Path) -> str:
+        """Read the case's prompt — inline or from prompt_file relative to evals.json's dir."""
         if case.prompt:
             return case.prompt
         assert case.prompt_file
-        target = (skill_path / case.prompt_file).resolve()
+        target = (evals_json.parent / case.prompt_file).resolve()
         if not target.exists():
             raise FileNotFoundError(
                 f"case id={case.id}: prompt_file '{case.prompt_file}' not found at {target}"
@@ -323,18 +323,30 @@ def find_evals_config(skill_path: Path) -> Path:
 
 
 def validate_skill_workspace(skill_path: Path, workspace: Path) -> None:
-    """Reject workspace == skill_path. dump_skill_state would copytree the live
-    skill into <iteration_dir>/skill-state/, and if iteration_dir lives directly
-    under skill_path, copytree recurses through the destination it just wrote.
+    """Reject workspace inside skill_path (including equality).
 
-    Nesting workspace inside skill_path is allowed — the runner and dashboard
-    uploader both prune the workspace subtree to keep that case sane.
+    skill_path is the live skill — what the agent reads. workspace is where
+    iteration outputs accumulate. Putting workspace under skill_path means
+    dump_skill_state's copytree of the live skill would recurse through the
+    iteration output it just wrote, and the dashboard uploader's skill_files
+    walk would sweep iteration artifacts into the payload.
+
+    Eval harness data (evals.json, prompts/, seed/, setup scripts) belongs
+    next to evals.json, not under skill_path. That's where file references
+    in evals.json now resolve from.
     """
-    if skill_path.resolve() == workspace.resolve():
+    skill_resolved = skill_path.resolve()
+    workspace_resolved = workspace.resolve()
+    if workspace_resolved == skill_resolved:
         raise ConfigError(
             f"--workspace must not be the same directory as --skill-path "
-            f"({skill_path}). Pick a workspace path that differs (a sibling or "
-            f"a sub-directory like {skill_path}/workspace works)."
+            f"({skill_path}). Place workspace outside the skill directory."
+        )
+    if skill_resolved in workspace_resolved.parents:
+        raise ConfigError(
+            f"--workspace ({workspace}) must not be nested inside --skill-path "
+            f"({skill_path}). Place workspace alongside or outside the skill "
+            f"directory — e.g. next to your evals.json."
         )
 
 

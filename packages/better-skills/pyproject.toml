@@ -27,7 +27,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "better-skills"
-version = "0.5.1"
+version = "0.6.0"
 description = "CLI for authoring, evaluating, and iteratively improving Claude Agent Skills."
 readme = "README.md"
 requires-python = ">=3.10"
