@@ -70,6 +70,13 @@ export const iterations = pgTable(
     // Map of {relative_path: file_contents} for the rest of the skill dir
     // (excludes SKILL.md and evals.json — those have dedicated columns).
     skillFiles: jsonb("skill_files"),
+    // Per-case metadata array as the runner saw it at plan time. Each entry
+    // is the eval_metadata.json for one case: eval_id, eval_name, the
+    // resolved (concatenated) prompt, plus the prompt_template/prompt_file
+    // path+content pieces. Lets the dashboard diff the exact prompt content
+    // — including any project-level template referenced by prompt_template
+    // even when the file lives outside the evals directory.
+    evalMetadata: jsonb("eval_metadata"),
 
     uploadedAt: timestamp("uploaded_at", { withTimezone: true })
       .notNull()

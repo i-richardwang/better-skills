@@ -68,6 +68,12 @@ const bodySchema = z.object({
   // (sub-docs, agents, scripts) keyed by relative path. SKILL.md and
   // evals.json are excluded — they ride on their own fields above.
   skill_files: skillFilesSchema.optional(),
+  // eval_metadata is one entry per case: the resolved prompt the executor
+  // actually saw plus the prompt_template / prompt_file path+content
+  // breakdown. Captures any project-level prompt template the case pulled
+  // in via the prompt_template field, even when that file lives outside
+  // the evals directory.
+  eval_metadata: z.array(z.any()).optional(),
 });
 
 type Body = z.infer<typeof bodySchema>;
@@ -199,6 +205,7 @@ export async function POST(request: Request) {
     hostname,
     evals_definition,
     skill_files,
+    eval_metadata,
   } = parsed;
 
   const iterSummary = extractIterationSummary(benchmark);
@@ -229,6 +236,7 @@ export async function POST(request: Request) {
         rawBenchmark: benchmark,
         evalsDefinition: evals_definition ?? null,
         skillFiles: skill_files ?? null,
+        evalMetadata: eval_metadata ?? null,
       };
 
       const [iterationRow] = await tx
@@ -244,6 +252,7 @@ export async function POST(request: Request) {
             rawBenchmark: benchmark,
             evalsDefinition: evals_definition ?? null,
             skillFiles: skill_files ?? null,
+            evalMetadata: eval_metadata ?? null,
             uploadedAt: sql`now()`,
           },
         })

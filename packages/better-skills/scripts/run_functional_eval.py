@@ -658,7 +658,8 @@ def plan_runs(
         eval_dir = iteration_dir / f"eval-{case.id}"
         eval_dir.mkdir(parents=True, exist_ok=True)
 
-        prompt = config.resolve_prompt(case, evals_json)
+        parts = config.resolve_prompt_parts(case, evals_json)
+        prompt = parts["prompt"]
         eval_name = case.name or f"eval-{case.id}"
         expectations = list(case.expectations)
         resolved_files = [_resolve_case_file(f, evals_json) for f in case.files]
@@ -667,6 +668,10 @@ def plan_runs(
             "eval_id": case.id,
             "eval_name": eval_name,
             "prompt": prompt,
+            "prompt_template_path": parts["prompt_template_path"],
+            "prompt_template_content": parts["prompt_template_content"],
+            "prompt_file_path": parts["prompt_file_path"],
+            "prompt_file_content": parts["prompt_file_content"],
             "assertions": expectations,
         }
         (eval_dir / "eval_metadata.json").write_text(json.dumps(metadata, indent=2))

@@ -204,6 +204,24 @@ def collect_runs(benchmark_dir: Path) -> list[dict]:
     return runs
 
 
+def collect_eval_metadata(benchmark_dir: Path) -> list[dict]:
+    """Walk eval-*/eval_metadata.json and return the list of per-case metadata.
+
+    Each entry is the eval_metadata.json the runner wrote at plan time —
+    eval_id, eval_name, the resolved prompt, the prompt_template/prompt_file
+    path+content pieces, and the case's assertions. The dashboard uses this
+    to render and diff the actual prompt content (template + body) that fed
+    each iteration's runs, independent of whether the prompt files live
+    inside or outside the evals directory.
+    """
+    out: list[dict] = []
+    for eval_dir in sorted(benchmark_dir.glob("eval-*")):
+        meta = _read_json(eval_dir / "eval_metadata.json")
+        if isinstance(meta, dict):
+            out.append(meta)
+    return out
+
+
 def _read_evals_definition(evals_path: Optional[Path]) -> Optional[dict]:
     """Read the evals config used for this iteration as the dashboard snapshot.
 
@@ -237,6 +255,7 @@ def build_payload(
         "iteration_number": iteration_number,
         "benchmark": benchmark,
         "runs": collect_runs(benchmark_dir),
+        "eval_metadata": collect_eval_metadata(benchmark_dir),
         "hostname": socket.gethostname(),
     }
 

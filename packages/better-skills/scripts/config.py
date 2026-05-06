@@ -179,7 +179,20 @@ class CaseConfig(BaseModel):
     id: int = Field(..., description="Stable integer ID; used for eval-<id>/ dir names.")
     name: str | None = Field(None, description="Human-readable label; falls back to 'eval-<id>'.")
     prompt: str | None = Field(None, description="Inline prompt body. Mutually exclusive with prompt_file.")
-    prompt_file: str | None = Field(None, description="Path (relative to skill dir) to a markdown file containing the prompt.")
+    prompt_file: str | None = Field(None, description="Path to a markdown file containing the case-specific prompt body. Resolved relative to evals.json's directory (or absolute).")
+    prompt_template: str | None = Field(
+        None,
+        description=(
+            "Optional path to a shared prompt template (project-level guidance, "
+            "business constraints, output contract) that gets prepended to "
+            "prompt_file/prompt with a blank-line separator. Resolved relative "
+            "to evals.json's directory (or absolute). Use this when multiple "
+            "cases share the same upper-layer prompt — declaring it here means "
+            "the runner injects the template (no need to write 'go read X' in "
+            "each prompt_file) and the dashboard captures the template content "
+            "alongside each iteration."
+        ),
+    )
     files: list[str] = Field(default_factory=list, description="Input file paths mentioned in the executor prompt. Files must already exist on disk; this script does not materialize them. Relative paths are resolved against the skill directory (where evals.json lives) so they survive the runner's cwd isolation.")
     expectations: list[str] = Field(default_factory=list, description="Assertion strings the grader checks against the transcript + outputs.")
     timeout_s: int | None = Field(None, ge=1, description="Override defaults.timeout_s for this case.")
@@ -197,8 +210,11 @@ class CaseConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_prompt(self) -> "CaseConfig":
-        if not self.prompt and not self.prompt_file:
-            raise ValueError(f"case id={self.id}: must set prompt or prompt_file")
+        if not (self.prompt or self.prompt_file or self.prompt_template):
+            raise ValueError(
+                f"case id={self.id}: must set at least one of "
+                f"prompt, prompt_file, or prompt_template"
+            )
         if self.prompt and self.prompt_file:
             raise ValueError(f"case id={self.id}: prompt and prompt_file are mutually exclusive")
         return self
@@ -226,17 +242,59 @@ class EvalsConfig(BaseModel):
             raise ValueError(f"duplicate case ids: {sorted(set(dups))}")
         return self
 
+    def resolve_prompt_parts(self, case: CaseConfig, evals_json: Path) -> dict:
+        """Read the case's prompt components.
+
+        Returns a dict with the final concatenated `prompt` plus the individual
+        pieces (`prompt_template_path`/`prompt_template_content`,
+        `prompt_file_path`/`prompt_file_content`). Path/content fields are None
+        when the corresponding evals.json field isn't declared. Used by the
+        runner to write eval_metadata.json so the dashboard can see exactly
+        what fed the executor and diff template vs. case body separately.
+
+        Concat order: template first (sets context — business rules, output
+        contract), then case body (the actual ask), separated by a blank line.
+        """
+        template_path: str | None = None
+        template_content: str | None = None
+        file_path: str | None = None
+        file_content: str | None = None
+
+        parts: list[str] = []
+
+        if case.prompt_template:
+            target = (evals_json.parent / case.prompt_template).resolve()
+            if not target.exists():
+                raise FileNotFoundError(
+                    f"case id={case.id}: prompt_template '{case.prompt_template}' not found at {target}"
+                )
+            template_path = case.prompt_template
+            template_content = target.read_text()
+            parts.append(template_content)
+
+        if case.prompt_file:
+            target = (evals_json.parent / case.prompt_file).resolve()
+            if not target.exists():
+                raise FileNotFoundError(
+                    f"case id={case.id}: prompt_file '{case.prompt_file}' not found at {target}"
+                )
+            file_path = case.prompt_file
+            file_content = target.read_text()
+            parts.append(file_content)
+        elif case.prompt:
+            parts.append(case.prompt)
+
+        return {
+            "prompt": "\n\n".join(parts),
+            "prompt_template_path": template_path,
+            "prompt_template_content": template_content,
+            "prompt_file_path": file_path,
+            "prompt_file_content": file_content,
+        }
+
     def resolve_prompt(self, case: CaseConfig, evals_json: Path) -> str:
-        """Read the case's prompt — inline or from prompt_file relative to evals.json's dir."""
-        if case.prompt:
-            return case.prompt
-        assert case.prompt_file
-        target = (evals_json.parent / case.prompt_file).resolve()
-        if not target.exists():
-            raise FileNotFoundError(
-                f"case id={case.id}: prompt_file '{case.prompt_file}' not found at {target}"
-            )
-        return target.read_text()
+        """Read the case's prompt as a single string (template + body, concatenated)."""
+        return self.resolve_prompt_parts(case, evals_json)["prompt"]
 
 
 # --- Trigger eval config ----------------------------------------------------

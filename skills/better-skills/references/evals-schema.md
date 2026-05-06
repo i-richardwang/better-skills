@@ -40,6 +40,10 @@ iterations can compare against it.
       "name": "make a chart",                  // optional human label
       "prompt": "Create a bar chart from ...", // inline OR prompt_file (XOR)
       "prompt_file": null,                     // path relative to evals.json's dir
+      "prompt_template": null,                 // optional shared template (path,
+                                               // resolved like prompt_file). Prepended
+                                               // to prompt/prompt_file with a blank
+                                               // line. See "prompt_template" below.
       "files": [                               // file paths mentioned in prompt
         "data.csv"                             // relative paths resolve to <evals.json dir>/data.csv;
                                                // absolute paths pass through unchanged.
@@ -84,7 +88,7 @@ default.
 ### Validation rules (enforced by pydantic)
 
 - `default_baseline` must match the grammar above.
-- Each case must set exactly one of `prompt` or `prompt_file`.
+- Each case must set at least one of `prompt`, `prompt_file`, or `prompt_template`. `prompt` and `prompt_file` are mutually exclusive (use one for the case-specific body); `prompt_template` is independent and may be combined with either.
 - Case IDs must be unique.
 - `runs_per_config`, `timeout_s`, `num_workers` must be ≥ 1.
 - `per_run_setup.env` (if set): every list must be non-empty, all keys equal
@@ -138,6 +142,43 @@ normal markdown.
   "prompt_file": "evals/prompts/case-1.md"
 }
 ```
+
+### prompt_template — shared upper-layer prompt
+
+`prompt_template` is for the layer above each case: project-level guidance,
+business constraints, output contract — content many cases share. The runner
+prepends the template to the case body (`prompt_file` or `prompt`) with a
+blank line in between, so the executor sees one merged prompt.
+
+Use it when you'd otherwise write `"完整阅读 X 并按其要求执行"` (or
+`"Read X and follow it"`) at the top of every `prompt_file`. Declaring the
+shared template as a field gives you two things:
+
+1. **No boilerplate** — the case-specific `prompt_file` only carries
+   case-specific parameters; the upper-layer prompt is injected automatically.
+2. **Captured in the dashboard** — the template's path and full content are
+   recorded per iteration alongside the case body. When the template changes
+   between iterations, the dashboard shows the diff. Without this field a
+   referenced template is invisible to the dashboard (the case prompt only
+   names a path).
+
+Path resolution is the same as `prompt_file`: relative paths anchor on
+evals.json's directory; absolute paths pass through. The template can live
+anywhere — inside the evals dir, in a sibling project directory, or in a
+shared repo — only the file content is captured, not its location.
+
+```jsonc
+{
+  "id": 1,
+  "name": "tsinghua/baseline",
+  "prompt_template": "../../prompts/gather-entity-aliases/school-aliases.md",
+  "prompt_file": "prompts/case-1-tsinghua-baseline.md"
+}
+```
+
+The combined prompt is `<template content>\n\n<prompt_file content>`. Order
+is fixed: template first (rules), case second (the ask). If you only need the
+template (no per-case body), you can set `prompt_template` alone.
 
 ## Advanced: `per_run_setup` — parallel external state
 
