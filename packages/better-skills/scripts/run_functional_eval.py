@@ -944,7 +944,6 @@ def run_all(
     default_timeout: int | None = None,
     runs_per_config: int | None = None,
     phase: str = "all",
-    grader_md: Path | None = None,
     resume: bool = False,
     skill_name: str | None = None,
 ) -> dict:
@@ -1044,11 +1043,14 @@ def run_all(
 
     grader_results: list[dict] | None = None
     if phase in ("all", "grader"):
-        grader_md_path = Path(grader_md) if grader_md else (
-            Path(__file__).resolve().parent.parent / "agents" / "grader.md"
-        )
+        grader_md_path = Path(__file__).resolve().parent / "data" / "agents" / "grader.md"
         if not grader_md_path.exists():
-            raise FileNotFoundError(f"grader.md not found at {grader_md_path}")
+            raise FileNotFoundError(
+                f"grader.md not found at {grader_md_path}. "
+                f"If installed from source, run "
+                f"`python packages/better-skills/sync_skill_data.py` "
+                f"or reinstall with `pip install -e .` to populate scripts/data/."
+            )
         grader_system_prompt = grader_md_path.read_text()
         grader_executor = config.grader_executor
         if config.grader_model is not None:

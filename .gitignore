@@ -14,4 +14,6 @@ skills-lock.json
 build/
 dist/
 .eggs/
+# Synced from skills/better-skills/ by setup.py / sync_skill_data.py — generated artifact, not source
+packages/better-skills/scripts/data/
 

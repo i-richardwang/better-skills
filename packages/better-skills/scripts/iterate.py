@@ -32,7 +32,7 @@ def launch_viewer(
 ) -> int | None:
     """Spawn the viewer as a detached background process. Returns pid or None on failure."""
     viewer_script = (
-        Path(__file__).resolve().parent.parent / "eval-viewer" / "generate_review.py"
+        Path(__file__).resolve().parent / "data" / "eval-viewer" / "generate_review.py"
     )
     if not viewer_script.exists():
         print(f"[viewer] script not found at {viewer_script}; skipping", file=sys.stderr)
@@ -94,7 +94,6 @@ def run_iteration(args: argparse.Namespace) -> dict:
         default_timeout=args.default_timeout,
         runs_per_config=args.runs_per_config,
         phase=args.phase,
-        grader_md=Path(args.grader_md) if args.grader_md else None,
         resume=args.resume,
         skill_name=skill_name,
     )
