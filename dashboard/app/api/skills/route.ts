@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { desc, sql } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db/client";
 
 export const runtime = "nodejs";
@@ -14,12 +14,11 @@ export async function GET() {
         latest_pass_rate: schema.skills.latestPassRate,
         created_at: schema.skills.createdAt,
         updated_at: schema.skills.updatedAt,
-        iterations_count: sql<number>`(
-          select count(*)::int from ${schema.iterations}
-          where ${schema.iterations.skillId} = ${schema.skills.id}
-        )`,
+        iterations_count: count(schema.iterations.id),
       })
       .from(schema.skills)
+      .leftJoin(schema.iterations, eq(schema.iterations.skillId, schema.skills.id))
+      .groupBy(schema.skills.id)
       .orderBy(desc(schema.skills.updatedAt));
 
     return NextResponse.json({ skills: rows });
