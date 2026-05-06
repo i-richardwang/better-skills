@@ -197,14 +197,7 @@ Every iteration runs each case under exactly two configurations: `current` (the 
 
 The `better-skills` CLI exposes one subcommand per pipeline stage. `iterate` is the default — it runs all executors + graders in parallel, writes a per-iteration manifest, dumps the live skill into `iteration-N/skill-state/` for future-iteration comparisons, aggregates into `benchmark.json`/`benchmark.md`, and launches the viewer in the background — all from one command.
 
-Before launching, ensure an `evals.json` exists with `defaults` + `cases` (see `references/evals-schema.md` for the schema, or `better-skills init <skill-path>` to scaffold a starting template at `<skill>/evals.json`).
-
-**Where to put evals.json + fixtures.** Two layouts both work:
-
-- **In the skill** (default, simplest): `<skill>/evals.json` plus any `prompts/`, `seed/`, `setup-*.sh` next to it. Good when the skill is small and the harness is trivial.
-- **Next to the skill** (harness directory): keep the skill clean by putting `evals.json` and its fixtures in a sibling directory (e.g. `<repo>/evals/<skill-name>/{evals.json, prompts/, seed/, setup-*.sh}`). Pass `--evals-json <path>` explicitly. **All file references inside evals.json (`prompt_file`, `case.files`, `per_run_setup.script`) resolve relative to evals.json's own directory** — so the fixtures naturally co-locate with the config.
-
-**Workspace constraint.** `--workspace` must be **outside** `--skill-path` (the runner rejects nested workspaces — they would cause `dump_skill_state`'s copytree to recurse into the iteration output). Pick a sibling like `<skill>-workspace/`, or place workspace inside the harness directory above.
+Before launching, ensure `<skill>/evals.json` exists with `defaults` + `cases` (see `references/evals-schema.md` for the schema, or `better-skills init <skill-path>` to scaffold a starting template). `--workspace` must be a directory outside `--skill-path` (a sibling like `<skill-name>-workspace/` is the conventional choice).
 
 **Invocation** — launch as a **background Bash tool call** (`run_in_background: true`) so you can draft assertions while it runs:
 

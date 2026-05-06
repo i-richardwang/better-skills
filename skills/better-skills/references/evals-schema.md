@@ -7,7 +7,7 @@ Two JSON files describe a skill's evals; both are validated by `scripts/config.p
 
 `better-skills init <skill-path>` scaffolds them at `<skill>/evals.json` and `<skill>/triggers.json` — the simplest layout. They can also live in a sibling harness directory (e.g. `<repo>/evals/<skill-name>/evals.json`) when you want to keep the skill folder clean; pass `--evals-json <path>` to point the CLI at the non-default location.
 
-**Anchoring rule for file references.** All relative paths inside `evals.json` (`prompt_file`, `case.files`, `per_run_setup.script`) resolve against the directory containing **that evals.json file**, not against `--skill-path`. This means fixtures (prompts, seed data, setup scripts) co-locate naturally with the eval config, regardless of which layout you pick.
+Relative paths inside `evals.json` (`prompt_file`, `case.files`, `per_run_setup.script`) resolve against evals.json's own directory, not `--skill-path`. Fixtures co-locate with the config they belong to.
 
 ## evals.json
 
