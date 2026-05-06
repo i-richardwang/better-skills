@@ -223,7 +223,7 @@ The runner auto-snapshots the live skill into `iteration-N/skill-state/` at iter
 - `--default-timeout SEC` — per-run ceiling; per-case override via a `timeout_s` field in evals.json
 - `--baseline <spec>` — override `default_baseline` from evals.json (`none | previous | iteration-N | path:/abs`)
 - `--runs-per-config N` — replicate each case × config N times for variance analysis
-- `--resume` — skip runs whose transcript already shows executor success (and `grading.json` exists for the grader phase). Use after a crash, network blip, or to add new runs to a partial iteration.
+- `--resume` — skip runs that already finished; re-execute the rest. Per-run granularity: a transcript with a final `result` event counts as done (executor phase), and the grader additionally requires `grading.json`. Anything else — crashed runs, transient infra errors (cert/router/network blip), or runs you newly added to `evals.json` — gets re-run; passed cases are left untouched. Works with both `iterate` and `run`; just re-issue the same command with `--resume` appended.
 - `--phase executor` / `--phase grader` — run only one phase. Useful when interleaving manual work between phases.
 - `--no-view` / `--no-aggregate` — skip the trailing steps when you only want raw runs.
 - `--previous-iteration <N>` — pass `<workspace>/iteration-<N>/` to the viewer as `--previous-workspace` for diff display.
