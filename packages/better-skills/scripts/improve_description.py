@@ -60,7 +60,7 @@ def _call_opencode(prompt: str, model: str | None, timeout: int) -> str:
             "opencode CLI not found on PATH. Install it (https://opencode.ai) "
             "or set improver_executor=claude in triggers.json."
         )
-    cmd = ["opencode", "run", "--format", "json", "--dangerously-skip-permissions"]
+    cmd = ["opencode", "run", "--format", "json", "--dangerously-skip-permissions", "--pure"]
     if model:
         cmd.extend(["--model", model])
     cmd.append(prompt)

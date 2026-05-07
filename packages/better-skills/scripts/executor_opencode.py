@@ -27,11 +27,14 @@ def build_opencode_cmd(
 
     --dangerously-skip-permissions auto-approves all tool prompts (the runner
     can't field interactive permission asks from a subprocess).
+    --pure skips external opencode plugins so the eval subprocess runs with
+    a clean tool surface, regardless of what the user has configured globally.
     """
     cmd = [
         "opencode", "run",
         "--format", "json",
         "--dangerously-skip-permissions",
+        "--pure",
     ]
     if model:
         cmd.extend(["--model", model])

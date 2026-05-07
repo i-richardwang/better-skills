@@ -234,7 +234,7 @@ def _run_single_query_opencode(
             "or set executor=claude in triggers.json."
         )
 
-    cmd = ["opencode", "run", "--format", "json", "--dangerously-skip-permissions"]
+    cmd = ["opencode", "run", "--format", "json", "--dangerously-skip-permissions", "--pure"]
     if model:
         cmd.extend(["--model", model])
     cmd.append(query)
