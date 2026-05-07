@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getSkillEvalDetail } from "@/lib/queries";
 import type {
   EvalIterationResult,
+  EvalMetadataEntry,
   EvalRunResult,
   Expectation,
 } from "@/lib/queries";
@@ -23,6 +24,11 @@ import {
   type TrajectoryDatum,
 } from "@/components/trajectory-chart-client";
 import { ExpectationMatrixCard } from "@/components/expectation-matrix";
+import {
+  ResponsiveDiff,
+  computeLineDiff,
+  diffStats,
+} from "@/components/diff-view";
 import { buildExpectationMatrix } from "@/lib/expectation-matrix";
 import { cn } from "@/lib/utils";
 
@@ -154,7 +160,9 @@ export default async function EvalDetailPage({
       </header>
 
       <TaskSection
-        prompt={detail.definition?.prompt ?? null}
+        skillName={name}
+        iterations={detail.iterations}
+        fallbackPrompt={detail.definition?.prompt ?? null}
         expectedOutput={detail.definition?.expectedOutput ?? null}
         files={detail.definition?.files ?? null}
         expectations={canonicalExpectations}
@@ -250,19 +258,112 @@ function SectionHeading({
   );
 }
 
+// Body content sourcing — same priority order as the runner's
+// resolve_prompt_parts: explicit prompt_file > template-stripped inline >
+// raw inline. Returns null when the entry itself is null.
+function bodyContentOf(e: EvalMetadataEntry | null): string | null {
+  if (!e) return null;
+  if (e.promptFileContent !== null) return e.promptFileContent;
+  if (e.promptTemplateContent !== null) {
+    const prefix = e.promptTemplateContent + "\n\n";
+    return e.prompt.startsWith(prefix) ? e.prompt.slice(prefix.length) : e.prompt;
+  }
+  return e.prompt;
+}
+
+// iterations[] is newest-first (per getSkillEvalDetail return). Latest =
+// iterations[0]. Returns the most recent iteration that actually has
+// metadata (older iters predate eval_metadata capture).
+function latestWithMetadata(
+  iterations: EvalIterationResult[],
+): EvalIterationResult | null {
+  for (const it of iterations) {
+    if (it.evalMetadata) return it;
+  }
+  return null;
+}
+
+type EvolutionStep = {
+  current: EvalIterationResult;
+  previous: EvalIterationResult;
+  templateChanged: boolean;
+  bodyChanged: boolean;
+  templateAdded: number;
+  templateRemoved: number;
+  bodyAdded: number;
+  bodyRemoved: number;
+};
+
+// Walks newest→oldest pairwise across iterations that have metadata,
+// emitting one step for each iter where template OR body changed vs the
+// nearest prior iter with metadata. Iters that predate metadata capture
+// are skipped silently (no fake "added" step against null).
+function buildEvolution(
+  iterations: EvalIterationResult[],
+): EvolutionStep[] {
+  const withMeta = iterations.filter((it) => it.evalMetadata !== null);
+  const steps: EvolutionStep[] = [];
+  for (let i = 0; i < withMeta.length - 1; i++) {
+    const cur = withMeta[i];
+    const prev = withMeta[i + 1];
+    const tplCur = cur.evalMetadata?.promptTemplateContent ?? null;
+    const tplPrev = prev.evalMetadata?.promptTemplateContent ?? null;
+    const bodyCur = bodyContentOf(cur.evalMetadata);
+    const bodyPrev = bodyContentOf(prev.evalMetadata);
+    const templateChanged = tplCur !== tplPrev;
+    const bodyChanged = bodyCur !== bodyPrev;
+    if (!templateChanged && !bodyChanged) continue;
+
+    let templateAdded = 0;
+    let templateRemoved = 0;
+    if (templateChanged && tplCur !== null && tplPrev !== null) {
+      const s = diffStats(computeLineDiff(tplPrev, tplCur));
+      templateAdded = s.added;
+      templateRemoved = s.removed;
+    }
+    let bodyAdded = 0;
+    let bodyRemoved = 0;
+    if (bodyChanged && bodyCur !== null && bodyPrev !== null) {
+      const s = diffStats(computeLineDiff(bodyPrev, bodyCur));
+      bodyAdded = s.added;
+      bodyRemoved = s.removed;
+    }
+
+    steps.push({
+      current: cur,
+      previous: prev,
+      templateChanged,
+      bodyChanged,
+      templateAdded,
+      templateRemoved,
+      bodyAdded,
+      bodyRemoved,
+    });
+  }
+  return steps;
+}
+
 function TaskSection({
-  prompt,
+  skillName,
+  iterations,
+  fallbackPrompt,
   expectedOutput,
   files,
   expectations,
 }: {
-  prompt: string | null;
+  skillName: string;
+  iterations: EvalIterationResult[];
+  fallbackPrompt: string | null;
   expectedOutput: string | null;
   files: string[] | null;
   expectations: string[];
 }) {
+  const latest = latestWithMetadata(iterations);
+  const evolution = buildEvolution(iterations);
+  const hasMetadata = latest !== null;
   const hasContent =
-    !!prompt ||
+    hasMetadata ||
+    !!fallbackPrompt ||
     !!expectedOutput ||
     (files && files.length > 0) ||
     expectations.length > 0;
@@ -280,49 +381,335 @@ function TaskSection({
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="space-y-6">
-            {prompt ? (
-              <Field label="Prompt">
-                <pre className="bg-muted/40 border-border overflow-auto border-l-2 px-4 py-3 font-mono text-[13px] leading-relaxed whitespace-pre-wrap">
-                  {prompt}
-                </pre>
-              </Field>
-            ) : null}
-            {expectedOutput ? (
-              <Field label="Expected output">
-                <p className="text-sm leading-relaxed">{expectedOutput}</p>
-              </Field>
-            ) : null}
-            {files && files.length > 0 ? (
-              <Field label="Input files">
-                <ul className="space-y-0.5 font-mono text-xs">
-                  {files.map((f, i) => (
-                    <li key={i} className="text-muted-foreground">
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-              </Field>
-            ) : null}
-            {expectations.length > 0 ? (
-              <Field label="Expectations">
-                <ul className="space-y-1 text-sm">
-                  {expectations.map((e, i) => (
-                    <li key={i} className="flex gap-2.5">
-                      <span className="text-muted-foreground font-mono text-[10px] leading-5 tabular-nums">
-                        {String(i + 1).padStart(2, "0")}
-                      </span>
-                      <span className="leading-snug">{e}</span>
-                    </li>
-                  ))}
-                </ul>
-              </Field>
-            ) : null}
-          </CardContent>
-        </Card>
+        <div className="space-y-4">
+          {hasMetadata ? (
+            <PromptCard
+              skillName={skillName}
+              latest={latest}
+              evolution={evolution}
+            />
+          ) : fallbackPrompt ? (
+            <Card>
+              <CardContent>
+                <Field label="Prompt">
+                  <pre className="bg-muted/40 border-border overflow-auto border-l-2 px-4 py-3 font-mono text-[13px] leading-relaxed whitespace-pre-wrap">
+                    {fallbackPrompt}
+                  </pre>
+                </Field>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {expectedOutput ||
+          (files && files.length > 0) ||
+          expectations.length > 0 ? (
+            <Card>
+              <CardContent className="space-y-6">
+                {expectedOutput ? (
+                  <Field label="Expected output">
+                    <p className="text-sm leading-relaxed">{expectedOutput}</p>
+                  </Field>
+                ) : null}
+                {files && files.length > 0 ? (
+                  <Field label="Input files">
+                    <ul className="space-y-0.5 font-mono text-xs">
+                      {files.map((f, i) => (
+                        <li key={i} className="text-muted-foreground">
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+                  </Field>
+                ) : null}
+                {expectations.length > 0 ? (
+                  <Field label="Expectations">
+                    <ul className="space-y-1 text-sm">
+                      {expectations.map((e, i) => (
+                        <li key={i} className="flex gap-2.5">
+                          <span className="text-muted-foreground font-mono text-[10px] leading-5 tabular-nums">
+                            {String(i + 1).padStart(2, "0")}
+                          </span>
+                          <span className="leading-snug">{e}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Field>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
       )}
     </section>
+  );
+}
+
+function PromptCard({
+  skillName,
+  latest,
+  evolution,
+}: {
+  skillName: string;
+  latest: EvalIterationResult;
+  evolution: EvolutionStep[];
+}) {
+  const meta = latest.evalMetadata!;
+  const tpl = meta.promptTemplateContent;
+  const tplPath = meta.promptTemplatePath;
+  const body = bodyContentOf(meta);
+  const filePath = meta.promptFilePath;
+
+  return (
+    <Card>
+      <CardContent className="space-y-6">
+        <div className="text-muted-foreground flex flex-wrap items-baseline justify-between gap-2 font-mono text-[10px] tracking-widest uppercase">
+          <span>Prompt · iteration #{latest.iterationNumber}</span>
+          {evolution.length > 0 ? (
+            <span>
+              {evolution.length} change{evolution.length === 1 ? "" : "s"} across
+              history
+            </span>
+          ) : null}
+        </div>
+
+        {tpl !== null || tplPath !== null ? (
+          <PromptSlotBlock
+            label="Template"
+            sublabel={tplPath ?? undefined}
+            content={tpl}
+            framing="template"
+          />
+        ) : null}
+
+        <PromptSlotBlock
+          label="Body"
+          sublabel={filePath ?? undefined}
+          content={body}
+          framing="body"
+        />
+
+        {evolution.length > 0 ? (
+          <EvolutionBlock skillName={skillName} steps={evolution} />
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PromptSlotBlock({
+  label,
+  sublabel,
+  content,
+  framing,
+}: {
+  label: string;
+  sublabel: string | undefined;
+  content: string | null;
+  framing: "template" | "body";
+}) {
+  // Body is the case's distinctive input, so it expands by default. Template
+  // is shared scaffolding — collapse to keep the page readable.
+  const open = framing === "body";
+  return (
+    <details className="border-border group/slot border" open={open}>
+      <summary
+        className={cn(
+          "bg-muted/40 hover:bg-muted/60 flex cursor-pointer flex-wrap items-baseline gap-2 px-3 py-2",
+          "list-none [&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <span
+          aria-hidden
+          className="text-muted-foreground w-3 shrink-0 transition-transform group-open/slot:rotate-90"
+        >
+          ›
+        </span>
+        <span className="text-muted-foreground shrink-0 font-mono text-[10px] tracking-widest uppercase">
+          {label}
+        </span>
+        {sublabel ? (
+          <span className="text-muted-foreground min-w-0 flex-1 truncate font-mono text-xs">
+            {sublabel}
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1" />
+        )}
+      </summary>
+      {content !== null ? (
+        <pre className="bg-muted border-border max-h-[36rem] overflow-auto border-t px-4 py-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap">
+          {content}
+        </pre>
+      ) : (
+        <p className="text-muted-foreground border-border border-t px-4 py-3 font-mono text-xs italic">
+          content not captured for this iteration
+        </p>
+      )}
+    </details>
+  );
+}
+
+function EvolutionBlock({
+  skillName,
+  steps,
+}: {
+  skillName: string;
+  steps: EvolutionStep[];
+}) {
+  return (
+    <details className="border-border group/evo border" open={false}>
+      <summary
+        className={cn(
+          "bg-muted/40 hover:bg-muted/60 flex cursor-pointer items-baseline gap-2 px-3 py-2",
+          "list-none [&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <span
+          aria-hidden
+          className="text-muted-foreground w-3 shrink-0 transition-transform group-open/evo:rotate-90"
+        >
+          ›
+        </span>
+        <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
+          Prompt evolution
+        </span>
+        <span className="text-muted-foreground font-mono text-xs">
+          {steps.length} change{steps.length === 1 ? "" : "s"}
+        </span>
+      </summary>
+      <div className="border-border border-t">
+        {steps.map((s) => (
+          <EvolutionStepView
+            key={s.current.iterationId}
+            skillName={skillName}
+            step={s}
+          />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function EvolutionStepView({
+  skillName,
+  step,
+}: {
+  skillName: string;
+  step: EvolutionStep;
+}) {
+  const tplCur = step.current.evalMetadata?.promptTemplateContent ?? null;
+  const tplPrev = step.previous.evalMetadata?.promptTemplateContent ?? null;
+  const bodyCur = bodyContentOf(step.current.evalMetadata);
+  const bodyPrev = bodyContentOf(step.previous.evalMetadata);
+
+  return (
+    <details className="border-border group/step border-b last:border-b-0" open>
+      <summary
+        className={cn(
+          "bg-muted/20 hover:bg-muted/40 flex cursor-pointer flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2",
+          "list-none [&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <span
+          aria-hidden
+          className="text-muted-foreground w-3 shrink-0 transition-transform group-open/step:rotate-90"
+        >
+          ›
+        </span>
+        <span className="font-mono text-xs">
+          <Link
+            href={`/skills/${encodeURIComponent(skillName)}/iterations/${step.current.iterationNumber}`}
+            className="hover:underline"
+          >
+            iter #{step.current.iterationNumber}
+          </Link>
+          <span className="text-muted-foreground mx-1.5">vs</span>
+          <Link
+            href={`/skills/${encodeURIComponent(skillName)}/iterations/${step.previous.iterationNumber}`}
+            className="hover:underline"
+          >
+            #{step.previous.iterationNumber}
+          </Link>
+        </span>
+        <span className="ml-auto flex items-baseline gap-3 font-mono text-xs tabular-nums">
+          {step.templateChanged ? (
+            <span>
+              <span className="text-muted-foreground text-[10px] tracking-widest uppercase">
+                tpl
+              </span>{" "}
+              <span className="text-emerald-600 dark:text-emerald-400">
+                +{step.templateAdded}
+              </span>{" "}
+              <span className="text-rose-600 dark:text-rose-400">
+                −{step.templateRemoved}
+              </span>
+            </span>
+          ) : null}
+          {step.bodyChanged ? (
+            <span>
+              <span className="text-muted-foreground text-[10px] tracking-widest uppercase">
+                body
+              </span>{" "}
+              <span className="text-emerald-600 dark:text-emerald-400">
+                +{step.bodyAdded}
+              </span>{" "}
+              <span className="text-rose-600 dark:text-rose-400">
+                −{step.bodyRemoved}
+              </span>
+            </span>
+          ) : null}
+        </span>
+      </summary>
+
+      {step.templateChanged ? (
+        <PromptDiffSlot label="Template" current={tplCur} previous={tplPrev} />
+      ) : null}
+      {step.bodyChanged ? (
+        <PromptDiffSlot label="Body" current={bodyCur} previous={bodyPrev} />
+      ) : null}
+    </details>
+  );
+}
+
+function PromptDiffSlot({
+  label,
+  current,
+  previous,
+}: {
+  label: string;
+  current: string | null;
+  previous: string | null;
+}) {
+  const header = (
+    <div className="bg-muted/30 border-border text-muted-foreground border-t px-3 py-1.5 font-mono text-[10px] tracking-widest uppercase">
+      {label}
+    </div>
+  );
+  if (current !== null && previous !== null) {
+    const parts = computeLineDiff(previous, current);
+    return (
+      <>
+        {header}
+        <ResponsiveDiff parts={parts} className="border-x-0 border-b-0" />
+      </>
+    );
+  }
+  const content = current ?? previous;
+  if (content === null) return null;
+  const isAdded = previous === null;
+  return (
+    <>
+      {header}
+      <pre
+        className={cn(
+          "border-border max-h-[28rem] overflow-auto border-t px-3 py-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap",
+          isAdded
+            ? "bg-emerald-500/5 text-emerald-900 dark:text-emerald-100"
+            : "bg-rose-500/5 text-rose-900 dark:text-rose-100",
+        )}
+      >
+        {content}
+      </pre>
+    </>
   );
 }
 

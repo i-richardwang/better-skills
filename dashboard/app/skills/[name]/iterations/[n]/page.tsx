@@ -22,7 +22,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { SkillMdCard } from "@/components/skill-md-card";
 import { SkillFilesCard } from "@/components/skill-files-card";
-import { PromptChangesCard } from "@/components/prompt-changes-card";
+import { PromptTemplatesCard } from "@/components/prompt-templates-card";
+import { CaseBodiesIndexCard } from "@/components/case-bodies-index-card";
 import type { EvalDefinition, Expectation } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -262,7 +263,7 @@ export default async function IterationPage({
               previous={iter.previousSkillMdSnapshot}
               previousIterationNumber={iter.previousIterationNumber}
             />
-            <PromptChangesCard
+            <PromptTemplatesCard
               skillName={name}
               current={iter.evalMetadata}
               previous={iter.previousEvalMetadata}
@@ -272,6 +273,12 @@ export default async function IterationPage({
               skillName={name}
               current={iter.skillFiles}
               previous={iter.previousSkillFiles}
+              previousIterationNumber={iter.previousIterationNumber}
+            />
+            <CaseBodiesIndexCard
+              skillName={name}
+              current={iter.evalMetadata}
+              previous={iter.previousEvalMetadata}
               previousIterationNumber={iter.previousIterationNumber}
             />
           </div>

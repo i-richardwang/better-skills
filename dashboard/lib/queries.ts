@@ -536,6 +536,10 @@ export type EvalIterationResult = {
   baselineResolved: string | null;
   currentRuns: EvalRunResult[];
   baselineRuns: EvalRunResult[];
+  // The runner-captured prompt snapshot for THIS case in THIS iteration
+  // (template path/content + body path/content + resolved prompt). Null when
+  // the iteration predates eval_metadata capture or the case wasn't run.
+  evalMetadata: EvalMetadataEntry | null;
 };
 
 export type EvalTrajectoryPoint = {
@@ -571,6 +575,7 @@ export async function getSkillEvalDetail(
     git_commit_sha: string | null;
     baseline_resolved: string | null;
     evals_definition: unknown;
+    eval_metadata: unknown;
     run_id: number;
     run_number: number;
     configuration: string;
@@ -591,6 +596,7 @@ export async function getSkillEvalDetail(
       i.git_commit_sha,
       i.baseline_resolved,
       i.evals_definition,
+      i.eval_metadata,
       r.id AS run_id,
       r.run_number,
       r.configuration,
@@ -619,6 +625,8 @@ export async function getSkillEvalDetail(
 
   for (const row of rows) {
     if (!byIter.has(row.iter_id)) {
+      const meta = extractEvalMetadata(row.eval_metadata);
+      const matchMeta = meta?.find((m) => m.evalId === evalId) ?? null;
       byIter.set(row.iter_id, {
         iterationNumber: row.iteration_number,
         iterationId: row.iter_id,
@@ -627,6 +635,7 @@ export async function getSkillEvalDetail(
         baselineResolved: row.baseline_resolved,
         currentRuns: [],
         baselineRuns: [],
+        evalMetadata: matchMeta,
       });
       const defs = extractEvalsDefinition(row.evals_definition);
       const match = defs?.find((d) => d.id === evalId) ?? null;
