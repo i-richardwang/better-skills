@@ -7,6 +7,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { computeLineDiff, diffStats } from "@/components/diff-view";
+import {
+  ChangeSummary,
+  type DiffStatus,
+  RowStats,
+  StatusGlyph,
+} from "@/components/diff-card-primitives";
 import type { EvalMetadataEntry } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -17,12 +23,10 @@ type Props = {
   previousIterationNumber: number | null;
 };
 
-type BodyStatus = "added" | "removed" | "modified" | "unchanged";
-
 type BodyEntry = {
   evalId: number;
   evalName: string | null;
-  status: BodyStatus;
+  status: DiffStatus;
   added: number;
   removed: number;
 };
@@ -60,7 +64,7 @@ function buildEntries(
     const cBody = bodyContentOf(c);
     const pBody = bodyContentOf(p);
 
-    let status: BodyStatus;
+    let status: DiffStatus;
     let added = 0;
     let removed = 0;
     if (c && !p) {
@@ -154,70 +158,6 @@ export function CaseBodiesIndexCard({
   );
 }
 
-function ChangeSummary({
-  added,
-  removed,
-  modified,
-}: {
-  added: number;
-  removed: number;
-  modified: number;
-}) {
-  const parts: React.ReactNode[] = [];
-  if (added > 0) {
-    parts.push(
-      <span key="add" className="text-emerald-600 dark:text-emerald-400">
-        {`+${added}`}
-      </span>,
-    );
-  }
-  if (removed > 0) {
-    parts.push(
-      <span key="del" className="text-rose-600 dark:text-rose-400">
-        {`−${removed}`}
-      </span>,
-    );
-  }
-  if (modified > 0) {
-    parts.push(
-      <span key="mod" className="text-amber-600 dark:text-amber-400">
-        {`~${modified}`}
-      </span>,
-    );
-  }
-  return (
-    <span className="font-mono tabular-nums">
-      {parts.map((p, i) => (
-        <span key={i}>
-          {i > 0 ? " " : null}
-          {p}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-const STATUS_SYMBOL: Record<BodyStatus, string> = {
-  added: "+",
-  removed: "−",
-  modified: "~",
-  unchanged: " ",
-};
-
-const STATUS_COLOR: Record<BodyStatus, string> = {
-  added: "text-emerald-600 dark:text-emerald-400",
-  removed: "text-rose-600 dark:text-rose-400",
-  modified: "text-amber-600 dark:text-amber-400",
-  unchanged: "text-muted-foreground",
-};
-
-const STATUS_LABEL: Record<BodyStatus, string> = {
-  added: "added",
-  removed: "removed",
-  modified: "modified",
-  unchanged: "unchanged",
-};
-
 function BodyList({
   skillName,
   entries,
@@ -242,37 +182,30 @@ function BodyRow({
   skillName: string;
   entry: BodyEntry;
 }) {
-  const sym = STATUS_SYMBOL[entry.status];
-  const symColor = STATUS_COLOR[entry.status];
   const label = entry.evalName ?? `eval ${entry.evalId}`;
   const href = `/skills/${encodeURIComponent(skillName)}/evals/${entry.evalId}`;
+  // Removed rows visually de-emphasize via lower opacity — they remain
+  // clickable (history is still useful) but read as background context.
+  const isRemoved = entry.status === "removed";
   return (
     <li>
       <Link
         href={href}
-        className="hover:bg-muted/60 flex items-baseline gap-2 px-3 py-2 transition-colors"
+        className={cn(
+          "hover:bg-muted/60 flex items-baseline gap-2 px-3 py-2 transition-colors",
+          isRemoved && "opacity-60 hover:opacity-100",
+        )}
       >
-        <span className={cn("w-3 shrink-0 select-none", symColor)}>{sym}</span>
+        <StatusGlyph status={entry.status} />
         <span className="text-muted-foreground shrink-0 tabular-nums">
           #{entry.evalId}
         </span>
         <span className="min-w-0 flex-1 truncate">{label}</span>
-        <span className="shrink-0 tabular-nums">
-          {entry.status === "modified" ? (
-            <>
-              <span className="text-emerald-600 dark:text-emerald-400">
-                +{entry.added}
-              </span>{" "}
-              <span className="text-rose-600 dark:text-rose-400">
-                −{entry.removed}
-              </span>
-            </>
-          ) : (
-            <span className={cn("text-[10px] tracking-widest uppercase", symColor)}>
-              {STATUS_LABEL[entry.status]}
-            </span>
-          )}
-        </span>
+        <RowStats
+          status={entry.status}
+          added={entry.added}
+          removed={entry.removed}
+        />
         <span aria-hidden className="text-muted-foreground shrink-0 text-[10px]">
           ↗
         </span>

@@ -12,6 +12,14 @@ import {
   computeLineDiff,
   diffStats,
 } from "@/components/diff-view";
+import {
+  ChangeSummary,
+  type DiffStatus,
+  RowStats,
+  StatusGlyph,
+  defaultOpenForStatus,
+  summaryBgForStatus,
+} from "@/components/diff-card-primitives";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -24,11 +32,9 @@ type Props = {
   caption?: string;
 };
 
-type FileStatus = "added" | "removed" | "modified" | "unchanged";
-
 type FileEntry = {
   path: string;
-  status: FileStatus;
+  status: DiffStatus;
   current: string | null;
   previous: string | null;
   added: number;
@@ -46,7 +52,7 @@ function buildEntries(
   for (const path of allPaths) {
     const c = path in current ? current[path] : null;
     const p = path in prev ? prev[path] : null;
-    let status: FileStatus;
+    let status: DiffStatus;
     let added = 0;
     let removed = 0;
     if (c !== null && p === null) {
@@ -76,9 +82,9 @@ function buildEntries(
 }
 
 // Two distinct surfaces share this component:
-//  - Iteration page (hasPrev): only changed files are listed; modified files
-//    expand to a side-by-side diff, added/removed expand to single-column
-//    full content with a status label.
+//  - Iteration page (hasPrev): only changed files are listed; modified/added
+//    files expand by default while removed files collapse (their content is
+//    gone — low-signal until the user asks).
 //  - Skill page Current source (no prev): file tree with full-content
 //    expand. The "view full" affordance lives here exclusively.
 export function SkillFilesCard({
@@ -148,9 +154,7 @@ export function SkillFilesCard({
       <CardContent className="space-y-3">
         <p className="text-muted-foreground text-xs">{caption ?? defaultCaption}</p>
 
-        {showChanges ? (
-          <ChangedFileList entries={changedEntries} />
-        ) : null}
+        {showChanges ? <ChangedFileList entries={changedEntries} /> : null}
 
         {/* Snapshot mode (skill page): collapsed file tree with full-content expand. */}
         {!hasPrev ? <SnapshotFileList entries={entries} /> : null}
@@ -159,75 +163,6 @@ export function SkillFilesCard({
   );
 }
 
-function ChangeSummary({
-  added,
-  removed,
-  modified,
-}: {
-  added: number;
-  removed: number;
-  modified: number;
-}) {
-  const parts: React.ReactNode[] = [];
-  if (added > 0) {
-    parts.push(
-      <span
-        key="add"
-        className="text-emerald-600 dark:text-emerald-400"
-      >{`+${added}`}</span>,
-    );
-  }
-  if (removed > 0) {
-    parts.push(
-      <span
-        key="del"
-        className="text-rose-600 dark:text-rose-400"
-      >{`−${removed}`}</span>,
-    );
-  }
-  if (modified > 0) {
-    parts.push(
-      <span
-        key="mod"
-        className="text-amber-600 dark:text-amber-400"
-      >{`~${modified}`}</span>,
-    );
-  }
-  return (
-    <span className="font-mono tabular-nums">
-      {parts.map((p, i) => (
-        <span key={i}>
-          {i > 0 ? " " : null}
-          {p}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-const STATUS_SYMBOL: Record<FileStatus, string> = {
-  added: "+",
-  removed: "−",
-  modified: "~",
-  unchanged: " ",
-};
-
-const STATUS_COLOR: Record<FileStatus, string> = {
-  added: "text-emerald-600 dark:text-emerald-400",
-  removed: "text-rose-600 dark:text-rose-400",
-  modified: "text-amber-600 dark:text-amber-400",
-  unchanged: "text-muted-foreground",
-};
-
-const STATUS_LABEL: Record<FileStatus, string> = {
-  added: "added",
-  removed: "removed",
-  modified: "modified",
-  unchanged: "unchanged",
-};
-
-// Iteration-page list: each changed file is its own collapsible row that
-// opens by default — the user came here for the diff.
 function ChangedFileList({ entries }: { entries: FileEntry[] }) {
   if (entries.length === 0) return null;
   return (
@@ -240,14 +175,16 @@ function ChangedFileList({ entries }: { entries: FileEntry[] }) {
 }
 
 function ChangedFileRow({ entry }: { entry: FileEntry }) {
-  const sym = STATUS_SYMBOL[entry.status];
-  const symColor = STATUS_COLOR[entry.status];
   return (
-    <details className="border-border group/file border" open>
+    <details
+      className="border-border group/file border"
+      open={defaultOpenForStatus(entry.status, "diff")}
+    >
       <summary
         className={cn(
-          "bg-muted/40 hover:bg-muted/60 flex cursor-pointer items-baseline gap-2 px-3 py-2",
+          "hover:bg-muted/60 flex cursor-pointer items-baseline gap-2 px-3 py-2",
           "list-none [&::-webkit-details-marker]:hidden",
+          summaryBgForStatus(entry.status),
         )}
       >
         <span
@@ -256,28 +193,15 @@ function ChangedFileRow({ entry }: { entry: FileEntry }) {
         >
           ›
         </span>
-        <span className={cn("w-3 shrink-0 select-none font-mono", symColor)}>
-          {sym}
-        </span>
+        <StatusGlyph status={entry.status} />
         <span className="min-w-0 flex-1 truncate font-mono text-xs">
           {entry.path}
         </span>
-        <span className="shrink-0 font-mono text-xs tabular-nums">
-          {entry.status === "modified" ? (
-            <>
-              <span className="text-emerald-600 dark:text-emerald-400">
-                +{entry.added}
-              </span>{" "}
-              <span className="text-rose-600 dark:text-rose-400">
-                −{entry.removed}
-              </span>
-            </>
-          ) : (
-            <span className={cn("uppercase tracking-widest text-[10px]", symColor)}>
-              {STATUS_LABEL[entry.status]}
-            </span>
-          )}
-        </span>
+        <RowStats
+          status={entry.status}
+          added={entry.added}
+          removed={entry.removed}
+        />
       </summary>
       <ChangedFileBody entry={entry} />
     </details>

@@ -11,6 +11,14 @@ import {
   computeLineDiff,
   diffStats,
 } from "@/components/diff-view";
+import {
+  ChangeSummary,
+  type DiffStatus,
+  RowStats,
+  StatusGlyph,
+  defaultOpenForStatus,
+  summaryBgForStatus,
+} from "@/components/diff-card-primitives";
 import type { EvalMetadataEntry } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -21,13 +29,11 @@ type Props = {
   previousIterationNumber: number | null;
 };
 
-type TemplateStatus = "added" | "removed" | "modified" | "unchanged";
-
 type Consumer = { evalId: number; evalName: string | null };
 
 type TemplateEntry = {
   path: string;
-  status: TemplateStatus;
+  status: DiffStatus;
   currentContent: string | null;
   previousContent: string | null;
   consumers: Consumer[];
@@ -86,7 +92,7 @@ function buildEntries(
       : null;
     const inPrev = prevByPath.has(path);
 
-    let status: TemplateStatus;
+    let status: DiffStatus;
     let added = 0;
     let removed = 0;
     if (cur && !inPrev) {
@@ -189,70 +195,6 @@ export function PromptTemplatesCard({
   );
 }
 
-function ChangeSummary({
-  added,
-  removed,
-  modified,
-}: {
-  added: number;
-  removed: number;
-  modified: number;
-}) {
-  const parts: React.ReactNode[] = [];
-  if (added > 0) {
-    parts.push(
-      <span key="add" className="text-emerald-600 dark:text-emerald-400">
-        {`+${added}`}
-      </span>,
-    );
-  }
-  if (removed > 0) {
-    parts.push(
-      <span key="del" className="text-rose-600 dark:text-rose-400">
-        {`−${removed}`}
-      </span>,
-    );
-  }
-  if (modified > 0) {
-    parts.push(
-      <span key="mod" className="text-amber-600 dark:text-amber-400">
-        {`~${modified}`}
-      </span>,
-    );
-  }
-  return (
-    <span className="font-mono tabular-nums">
-      {parts.map((p, i) => (
-        <span key={i}>
-          {i > 0 ? " " : null}
-          {p}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-const STATUS_SYMBOL: Record<TemplateStatus, string> = {
-  added: "+",
-  removed: "−",
-  modified: "~",
-  unchanged: " ",
-};
-
-const STATUS_COLOR: Record<TemplateStatus, string> = {
-  added: "text-emerald-600 dark:text-emerald-400",
-  removed: "text-rose-600 dark:text-rose-400",
-  modified: "text-amber-600 dark:text-amber-400",
-  unchanged: "text-muted-foreground",
-};
-
-const STATUS_LABEL: Record<TemplateStatus, string> = {
-  added: "added",
-  removed: "removed",
-  modified: "modified",
-  unchanged: "unchanged",
-};
-
 function TemplateList({
   skillName,
   entries,
@@ -286,19 +228,16 @@ function TemplateRow({
   entry: TemplateEntry;
   mode: "diff" | "snapshot";
 }) {
-  const sym = STATUS_SYMBOL[entry.status];
-  const symColor = STATUS_COLOR[entry.status];
-  // Snapshot mode (initial iter) collapses everything by default — only
-  // path/consumer info is interesting at a glance.
-  // Diff mode expands modified/added (the news), but keeps removed closed —
-  // its content is gone, low signal until the user explicitly asks.
-  const open = mode === "diff" && entry.status !== "removed";
   return (
-    <details className="border-border group/template border" open={open}>
+    <details
+      className="border-border group/template border"
+      open={defaultOpenForStatus(entry.status, mode)}
+    >
       <summary
         className={cn(
-          "bg-muted/40 hover:bg-muted/60 flex cursor-pointer flex-wrap items-baseline gap-2 px-3 py-2",
+          "hover:bg-muted/60 flex cursor-pointer flex-wrap items-baseline gap-2 px-3 py-2",
           "list-none [&::-webkit-details-marker]:hidden",
+          summaryBgForStatus(entry.status),
         )}
       >
         <span
@@ -307,30 +246,17 @@ function TemplateRow({
         >
           ›
         </span>
-        {mode === "diff" ? (
-          <span className={cn("w-3 shrink-0 select-none font-mono", symColor)}>
-            {sym}
-          </span>
-        ) : null}
+        {mode === "diff" ? <StatusGlyph status={entry.status} /> : null}
         <span className="min-w-0 flex-1 truncate font-mono text-xs">
           {entry.path}
         </span>
-        <span className="shrink-0 font-mono text-xs tabular-nums">
-          {entry.status === "modified" ? (
-            <>
-              <span className="text-emerald-600 dark:text-emerald-400">
-                +{entry.added}
-              </span>{" "}
-              <span className="text-rose-600 dark:text-rose-400">
-                −{entry.removed}
-              </span>
-            </>
-          ) : mode === "diff" ? (
-            <span className={cn("text-[10px] tracking-widest uppercase", symColor)}>
-              {STATUS_LABEL[entry.status]}
-            </span>
-          ) : null}
-        </span>
+        {mode === "diff" ? (
+          <RowStats
+            status={entry.status}
+            added={entry.added}
+            removed={entry.removed}
+          />
+        ) : null}
       </summary>
       <ConsumersRow skillName={skillName} consumers={entry.consumers} />
       <TemplateBody entry={entry} />

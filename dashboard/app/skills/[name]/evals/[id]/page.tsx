@@ -29,6 +29,7 @@ import {
   computeLineDiff,
   diffStats,
 } from "@/components/diff-view";
+import { summaryBgForStatus } from "@/components/diff-card-primitives";
 import { buildExpectationMatrix } from "@/lib/expectation-matrix";
 import { cn } from "@/lib/utils";
 
@@ -589,6 +590,24 @@ function EvolutionBlock({
   );
 }
 
+// A step is "removal-only" when every changed slot is just a deletion
+// (current side null with previous content) — typically the case was
+// removed from evals.json this iter. Low-signal by default so we collapse,
+// matching the diff-card primitives' rule: removed content reads as
+// background context until the user expands it.
+function stepIsRemovalOnly(step: EvolutionStep): boolean {
+  const tplCur = step.current.evalMetadata?.promptTemplateContent ?? null;
+  const tplPrev = step.previous.evalMetadata?.promptTemplateContent ?? null;
+  const bodyCur = bodyContentOf(step.current.evalMetadata);
+  const bodyPrev = bodyContentOf(step.previous.evalMetadata);
+
+  const tplActiveNews =
+    step.templateChanged && !(tplCur === null && tplPrev !== null);
+  const bodyActiveNews =
+    step.bodyChanged && !(bodyCur === null && bodyPrev !== null);
+  return !tplActiveNews && !bodyActiveNews;
+}
+
 function EvolutionStepView({
   skillName,
   step,
@@ -600,13 +619,18 @@ function EvolutionStepView({
   const tplPrev = step.previous.evalMetadata?.promptTemplateContent ?? null;
   const bodyCur = bodyContentOf(step.current.evalMetadata);
   const bodyPrev = bodyContentOf(step.previous.evalMetadata);
+  const removalOnly = stepIsRemovalOnly(step);
 
   return (
-    <details className="border-border group/step border-b last:border-b-0" open>
+    <details
+      className="border-border group/step border-b last:border-b-0"
+      open={!removalOnly}
+    >
       <summary
         className={cn(
-          "bg-muted/20 hover:bg-muted/40 flex cursor-pointer flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2",
+          "hover:bg-muted/40 flex cursor-pointer flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2",
           "list-none [&::-webkit-details-marker]:hidden",
+          removalOnly ? summaryBgForStatus("removed") : "bg-muted/20",
         )}
       >
         <span
