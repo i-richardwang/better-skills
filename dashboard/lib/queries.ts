@@ -151,6 +151,55 @@ export type EvalDefinition = {
   expectations: string[] | null;
 };
 
+// Per-case prompt snapshot the runner captured at plan time. Carries the
+// resolved (concatenated) prompt the executor saw plus the template/file
+// path+content breakdown — enough for the dashboard to diff prompt evolution
+// across iterations without needing the original evals.json on disk.
+export type EvalMetadataEntry = {
+  evalId: number;
+  evalName: string | null;
+  prompt: string;
+  promptTemplatePath: string | null;
+  promptTemplateContent: string | null;
+  promptFilePath: string | null;
+  promptFileContent: string | null;
+};
+
+function extractEvalMetadata(raw: unknown): EvalMetadataEntry[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: EvalMetadataEntry[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    const o = e as {
+      eval_id?: unknown;
+      eval_name?: unknown;
+      prompt?: unknown;
+      prompt_template_path?: unknown;
+      prompt_template_content?: unknown;
+      prompt_file_path?: unknown;
+      prompt_file_content?: unknown;
+    };
+    if (typeof o.eval_id !== "number") continue;
+    if (typeof o.prompt !== "string") continue;
+    out.push({
+      evalId: o.eval_id,
+      evalName: typeof o.eval_name === "string" ? o.eval_name : null,
+      prompt: o.prompt,
+      promptTemplatePath:
+        typeof o.prompt_template_path === "string" ? o.prompt_template_path : null,
+      promptTemplateContent:
+        typeof o.prompt_template_content === "string"
+          ? o.prompt_template_content
+          : null,
+      promptFilePath:
+        typeof o.prompt_file_path === "string" ? o.prompt_file_path : null,
+      promptFileContent:
+        typeof o.prompt_file_content === "string" ? o.prompt_file_content : null,
+    });
+  }
+  return out.length > 0 ? out : null;
+}
+
 function extractEvalsDefinition(raw: unknown): EvalDefinition[] | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const cases = (raw as { cases?: unknown }).cases;
@@ -243,6 +292,8 @@ export type IterationDetail = {
   hostname: string | null;
   uploadedAt: Date;
   evalsDefinition: EvalDefinition[] | null;
+  evalMetadata: EvalMetadataEntry[] | null;
+  previousEvalMetadata: EvalMetadataEntry[] | null;
   runs: RunRow[];
 };
 
@@ -293,6 +344,7 @@ export async function getIterationDetail(
       iterationNumber: schema.iterations.iterationNumber,
       skillMdSnapshot: schema.iterations.skillMdSnapshot,
       skillFiles: schema.iterations.skillFiles,
+      evalMetadata: schema.iterations.evalMetadata,
     })
     .from(schema.iterations)
     .where(
@@ -330,6 +382,8 @@ export async function getIterationDetail(
     hostname: iter.hostname,
     uploadedAt: iter.uploadedAt,
     evalsDefinition: extractEvalsDefinition(iter.evalsDefinition),
+    evalMetadata: extractEvalMetadata(iter.evalMetadata),
+    previousEvalMetadata: extractEvalMetadata(prev?.evalMetadata),
     runs: runs.map((r) => ({
       id: r.id,
       evalId: r.evalId,

@@ -22,6 +22,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { SkillMdCard } from "@/components/skill-md-card";
 import { SkillFilesCard } from "@/components/skill-files-card";
+import { PromptChangesCard } from "@/components/prompt-changes-card";
 import type { EvalDefinition, Expectation } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -232,7 +233,8 @@ export default async function IterationPage({
       </div>
 
       {(iter.skillMdSnapshot ||
-        (iter.skillFiles && Object.keys(iter.skillFiles).length > 0)) ? (
+        (iter.skillFiles && Object.keys(iter.skillFiles).length > 0) ||
+        (iter.evalMetadata && iter.evalMetadata.length > 0)) ? (
         <section className="space-y-4">
           <header className="border-border flex items-baseline justify-between border-b pb-3">
             <h2 className="font-heading text-xl tracking-tight">Source diff</h2>
@@ -258,6 +260,12 @@ export default async function IterationPage({
               iterationNumber={iter.iterationNumber}
               current={iter.skillMdSnapshot}
               previous={iter.previousSkillMdSnapshot}
+              previousIterationNumber={iter.previousIterationNumber}
+            />
+            <PromptChangesCard
+              skillName={name}
+              current={iter.evalMetadata}
+              previous={iter.previousEvalMetadata}
               previousIterationNumber={iter.previousIterationNumber}
             />
             <SkillFilesCard
