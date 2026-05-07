@@ -7,7 +7,6 @@ import {
 } from "@/lib/queries";
 import type { IterationPoint } from "@/lib/queries";
 import { SkillMdCard } from "@/components/skill-md-card";
-import { SkillFilesCard } from "@/components/skill-files-card";
 import {
   fmtDateTime,
   fmtDelta,
@@ -53,11 +52,11 @@ export default async function SkillPage({
   ]);
   if (!skill) notFound();
 
-  const hasCurrentSource =
-    currentSource !== null &&
-    (currentSource.skillMdSnapshot !== null ||
-      (currentSource.skillFiles !== null &&
-        Object.keys(currentSource.skillFiles).length > 0));
+  const hasSkillMd =
+    currentSource !== null && currentSource.skillMdSnapshot !== null;
+  const skillDescription = extractFrontmatterDescription(
+    currentSource?.skillMdSnapshot ?? null,
+  );
 
   const points = skill.points;
   const latest = points[points.length - 1] ?? null;
@@ -136,6 +135,34 @@ export default async function SkillPage({
         baselineLabel={baselineLabel}
       />
 
+      {hasSkillMd && currentSource ? (
+        <section className="space-y-4">
+          <header className="border-border flex items-baseline justify-between border-b pb-3">
+            <h2 className="font-heading text-xl tracking-tight">
+              About this skill
+            </h2>
+            <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
+              from{" "}
+              <Link
+                href={`/skills/${encodeURIComponent(skill.name)}/iterations/${currentSource.iterationNumber}`}
+                className="hover:text-foreground underline-offset-4 hover:underline"
+              >
+                iter #{currentSource.iterationNumber}
+              </Link>
+            </span>
+          </header>
+          <SkillMdCard
+            skillName={skill.name}
+            iterationNumber={currentSource.iterationNumber}
+            current={currentSource.skillMdSnapshot}
+            previous={null}
+            previousIterationNumber={null}
+            description={skillDescription}
+            caption={`Live SKILL.md as of iteration #${currentSource.iterationNumber}.`}
+          />
+        </section>
+      ) : null}
+
       <section className="space-y-4">
         <header className="border-border flex items-baseline justify-between border-b pb-3">
           <h2 className="font-heading text-xl tracking-tight">
@@ -188,42 +215,6 @@ export default async function SkillPage({
             currentLabel={currentLabel}
             baselineLabel={baselineLabel}
           />
-        </section>
-      ) : null}
-
-      {hasCurrentSource && currentSource ? (
-        <section className="space-y-4">
-          <header className="border-border flex items-baseline justify-between border-b pb-3">
-            <h2 className="font-heading text-xl tracking-tight">
-              Current source
-            </h2>
-            <span className="text-muted-foreground font-mono text-[10px] tracking-widest uppercase">
-              snapshot from{" "}
-              <Link
-                href={`/skills/${encodeURIComponent(skill.name)}/iterations/${currentSource.iterationNumber}`}
-                className="hover:text-foreground underline-offset-4 hover:underline"
-              >
-                iter #{currentSource.iterationNumber}
-              </Link>
-            </span>
-          </header>
-          <div className="space-y-4">
-            <SkillMdCard
-              skillName={skill.name}
-              iterationNumber={currentSource.iterationNumber}
-              current={currentSource.skillMdSnapshot}
-              previous={null}
-              previousIterationNumber={null}
-              caption={`Live SKILL.md as of iteration #${currentSource.iterationNumber}.`}
-            />
-            <SkillFilesCard
-              skillName={skill.name}
-              current={currentSource.skillFiles}
-              previous={null}
-              previousIterationNumber={null}
-              caption={`Supporting files captured with iteration #${currentSource.iterationNumber}.`}
-            />
-          </div>
         </section>
       ) : null}
 
@@ -415,6 +406,20 @@ function EmptyChart() {
       No iterations recorded
     </div>
   );
+}
+
+// SKILL.md begins with a YAML frontmatter block (--- ... ---). The
+// `description:` line is the canonical one-liner the user wrote to explain
+// what this skill is — surface it on the skill page so the headline metrics
+// have context without forcing the user to expand the full snapshot.
+// Multiline folded scalars aren't handled (rare); falls back gracefully.
+function extractFrontmatterDescription(md: string | null): string | null {
+  if (!md) return null;
+  const fm = md.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!fm) return null;
+  const desc = fm[1].match(/^description:\s*(.+?)\s*$/m);
+  if (!desc) return null;
+  return desc[1].replace(/^["']|["']$/g, "").trim() || null;
 }
 
 function IterationsTable({

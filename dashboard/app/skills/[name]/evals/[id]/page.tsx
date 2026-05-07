@@ -211,7 +211,6 @@ export default async function EvalDetailPage({
             <IterationResult
               key={it.iterationId}
               iteration={it}
-              expectationTexts={canonicalExpectations}
               skillName={name}
             />
           ))}
@@ -756,11 +755,9 @@ function Field({
 
 function IterationResult({
   iteration,
-  expectationTexts,
   skillName,
 }: {
   iteration: EvalIterationResult;
-  expectationTexts: string[];
   skillName: string;
 }) {
   const currentAvg = mean(iteration.currentRuns.map((r) => r.passRate));
@@ -810,26 +807,6 @@ function IterationResult({
         </div>
       </header>
 
-      {expectationTexts.length > 0 ? (
-        <div className="border-border border-b">
-          <div className="text-muted-foreground border-border grid grid-cols-[1fr_8rem_8rem] items-baseline gap-3 border-b px-5 py-2.5 font-mono text-[10px] tracking-widest uppercase">
-            <span>Expectations</span>
-            <span className="text-right">{currentLabel}</span>
-            <span className="text-right">{baselineLabel}</span>
-          </div>
-          <ul>
-            {expectationTexts.map((text, i) => (
-              <ExpectationCompareRow
-                key={i}
-                text={text}
-                currentRuns={iteration.currentRuns}
-                baselineRuns={iteration.baselineRuns}
-              />
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
       <div>
         <div className="text-muted-foreground border-border grid grid-cols-[2.5rem_1fr_1fr] items-baseline gap-3 border-b px-5 py-2.5 font-mono text-[10px] tracking-widest uppercase">
           <span>Run</span>
@@ -849,89 +826,6 @@ function mean(values: (number | null)[]): number | null {
   const v = values.filter((x): x is number => x !== null);
   if (v.length === 0) return null;
   return v.reduce((a, b) => a + b, 0) / v.length;
-}
-
-function ExpectationCompareRow({
-  text,
-  currentRuns,
-  baselineRuns,
-}: {
-  text: string;
-  currentRuns: EvalRunResult[];
-  baselineRuns: EvalRunResult[];
-}) {
-  const currentTally = tallyExpectation(text, currentRuns);
-  const baselineTally = tallyExpectation(text, baselineRuns);
-
-  return (
-    <li className="border-border grid grid-cols-[1fr_8rem_8rem] items-center gap-3 border-b px-5 py-2.5 last:border-b-0">
-      <span className="pr-2 text-sm leading-snug">{text}</span>
-      <TallyCell tally={currentTally} variant="current" />
-      <TallyCell tally={baselineTally} variant="baseline" />
-    </li>
-  );
-}
-
-type Tally = { passed: number; total: number };
-
-function tallyExpectation(text: string, runs: EvalRunResult[]): Tally {
-  let passed = 0;
-  let total = 0;
-  for (const run of runs) {
-    const match = run.expectations.find((e) => e.text === text);
-    if (!match) continue;
-    total += 1;
-    if (match.passed) passed += 1;
-  }
-  return { passed, total };
-}
-
-function TallyCell({
-  tally,
-  variant,
-}: {
-  tally: Tally;
-  variant: "current" | "baseline";
-}) {
-  const { passed, total } = tally;
-  if (total === 0) {
-    return (
-      <span className="text-muted-foreground justify-self-end font-mono text-xs">
-        —
-      </span>
-    );
-  }
-
-  const cells: ("pass" | "fail")[] = [];
-  for (let i = 0; i < total; i++) {
-    cells.push(i < passed ? "pass" : "fail");
-  }
-
-  const passColor =
-    variant === "current"
-      ? "bg-emerald-500/80 dark:bg-emerald-400/80"
-      : "bg-amber-600/70 dark:bg-amber-300/70";
-  const failColor = "bg-muted-foreground/15";
-
-  return (
-    <span className="flex items-center justify-end gap-2">
-      <span className="flex gap-0.5">
-        {cells.map((c, i) => (
-          <span
-            key={i}
-            aria-hidden
-            className={cn(
-              "h-3 w-3 shrink-0",
-              c === "pass" ? passColor : failColor,
-            )}
-          />
-        ))}
-      </span>
-      <span className="font-mono text-xs tabular-nums">
-        {passed}/{total}
-      </span>
-    </span>
-  );
 }
 
 function RunPairs({

@@ -291,7 +291,6 @@ export type IterationDetail = {
   gitCommitSha: string | null;
   hostname: string | null;
   uploadedAt: Date;
-  evalsDefinition: EvalDefinition[] | null;
   evalMetadata: EvalMetadataEntry[] | null;
   previousEvalMetadata: EvalMetadataEntry[] | null;
   runs: RunRow[];
@@ -381,7 +380,6 @@ export async function getIterationDetail(
     gitCommitSha: iter.gitCommitSha,
     hostname: iter.hostname,
     uploadedAt: iter.uploadedAt,
-    evalsDefinition: extractEvalsDefinition(iter.evalsDefinition),
     evalMetadata: extractEvalMetadata(iter.evalMetadata),
     previousEvalMetadata: extractEvalMetadata(prev?.evalMetadata),
     runs: runs.map((r) => ({
@@ -406,7 +404,6 @@ export async function getIterationDetail(
 export type SkillCurrentSource = {
   iterationNumber: number;
   skillMdSnapshot: string | null;
-  skillFiles: Record<string, string> | null;
 };
 
 export async function getSkillCurrentSource(
@@ -423,7 +420,6 @@ export async function getSkillCurrentSource(
     .select({
       iterationNumber: schema.iterations.iterationNumber,
       skillMdSnapshot: schema.iterations.skillMdSnapshot,
-      skillFiles: schema.iterations.skillFiles,
     })
     .from(schema.iterations)
     .where(eq(schema.iterations.skillId, skill.id))
@@ -434,7 +430,6 @@ export async function getSkillCurrentSource(
   return {
     iterationNumber: iter.iterationNumber,
     skillMdSnapshot: iter.skillMdSnapshot,
-    skillFiles: asSkillFiles(iter.skillFiles),
   };
 }
 

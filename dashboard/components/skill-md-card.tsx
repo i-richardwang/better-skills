@@ -23,6 +23,10 @@ type Props = {
   // Override the default per-state caption. Used by the skill page to frame
   // this as a current snapshot rather than an iteration diff.
   caption?: string;
+  // Optional one-liner pulled from the skill's frontmatter. Skill page passes
+  // this so users immediately see what the skill is for, without expanding
+  // the full snapshot.
+  description?: string | null;
 };
 
 // Two distinct surfaces share this component:
@@ -38,6 +42,7 @@ export function SkillMdCard({
   previous,
   previousIterationNumber,
   caption,
+  description,
 }: Props) {
   if (!current) return null;
 
@@ -94,6 +99,9 @@ export function SkillMdCard({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
+        {description ? (
+          <p className="text-foreground text-sm leading-relaxed">{description}</p>
+        ) : null}
         <p className="text-muted-foreground text-xs">{caption ?? defaultCaption}</p>
 
         {showDiff ? <ResponsiveDiff parts={parts} /> : null}
