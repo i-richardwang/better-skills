@@ -44,10 +44,13 @@ iterations can compare against it.
                                                // resolved like prompt_file). Prepended
                                                // to prompt/prompt_file with a blank
                                                // line. See "prompt_template" below.
-      "files": [                               // file paths mentioned in prompt
+      "files": [                               // file paths the executor needs
         "data.csv"                             // relative paths resolve to <evals.json dir>/data.csv;
-                                               // absolute paths pass through unchanged.
-                                               // (must already exist; not materialized)
+                                               // absolute paths pass through. Each file is staged
+                                               // into the executor's cwd at `inputs/<basename>`
+                                               // before the run; the envelope refers to it by
+                                               // basename so no project-tree path leaks. Basenames
+                                               // must be unique within a case.
       ],
       "expectations": [                        // grader's pass/fail criteria
         "produces a chart with axis labels",

@@ -193,7 +193,7 @@ class CaseConfig(BaseModel):
             "alongside each iteration."
         ),
     )
-    files: list[str] = Field(default_factory=list, description="Input file paths mentioned in the executor prompt. Files must already exist on disk; this script does not materialize them. Relative paths are resolved against the skill directory (where evals.json lives) so they survive the runner's cwd isolation.")
+    files: list[str] = Field(default_factory=list, description="Input file paths the executor needs. Resolved relative to evals.json's dir, then staged into the executor's cwd at `inputs/<basename>` before the run; the envelope references them by basename so no project-tree path leaks. Basenames must be unique within a case.")
     expectations: list[str] = Field(default_factory=list, description="Assertion strings the grader checks against the transcript + outputs.")
     timeout_s: int | None = Field(None, ge=1, description="Override defaults.timeout_s for this case.")
     env: dict[str, str] = Field(

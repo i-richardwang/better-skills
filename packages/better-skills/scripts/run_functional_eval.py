@@ -55,8 +55,10 @@ STATUS_FAILED = "failed"
 # Place each run's cwd outside any project tree so Claude Code's project-local
 # discovery (cwd-upward `.claude/skills/`, project `CLAUDE.md`, `.claude/commands/`)
 # cannot leak into the executor's system prompt and break the current/baseline
-# comparison. The executor receives absolute paths for input files and outputs,
-# so the empty cwd is invisible to the agent.
+# comparison. Input files are staged into `iso_cwd/inputs/` and the executor
+# writes outputs to `iso_cwd/outputs/`; the envelope references both by
+# relative path so no project-tree path is named to the agent. Outputs are
+# moved back into `run_dir/outputs/` after the executor exits.
 ISO_CWD_ROOT = Path("/tmp/better-skills-iso")
 
 
@@ -67,6 +69,57 @@ def _isolated_cwd(run_dir: Path) -> Path:
     iso = ISO_CWD_ROOT / f"{slug}-{h}"
     iso.mkdir(parents=True, exist_ok=True)
     return iso
+
+
+def _stage_inputs(iso_cwd: Path, files: list[str]) -> list[str]:
+    """Copy each input file into iso_cwd/inputs/<basename>; return relative paths.
+
+    Errors on basename collision rather than silently overwriting — the envelope
+    references files by basename, so collisions would silently shadow one file.
+    """
+    inputs_dir = iso_cwd / "inputs"
+    if inputs_dir.exists():
+        shutil.rmtree(inputs_dir)
+    inputs_dir.mkdir(parents=True)
+
+    seen: dict[str, str] = {}
+    relative: list[str] = []
+    for f in files:
+        src = Path(f)
+        name = src.name
+        if name in seen:
+            raise ValueError(
+                f"input file basename collision: {name!r} appears as both "
+                f"{seen[name]!r} and {f!r}. The envelope references inputs by "
+                f"basename to keep the executor's cwd path-agnostic; rename one."
+            )
+        seen[name] = f
+        dst = inputs_dir / name
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+        relative.append(f"inputs/{name}")
+    return relative
+
+
+def _collect_outputs(iso_outputs: Path, run_outputs: Path) -> None:
+    """Move executor-written outputs from iso_cwd/outputs/ into run_dir/outputs/.
+
+    Always called (try/finally), so partial outputs from a crashed/timed-out
+    executor are still visible for debugging.
+    """
+    if not iso_outputs.exists():
+        return
+    run_outputs.mkdir(parents=True, exist_ok=True)
+    for item in iso_outputs.iterdir():
+        dst = run_outputs / item.name
+        if dst.exists():
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            else:
+                dst.unlink()
+        shutil.move(str(item), str(dst))
 
 
 def _resolve_case_file(file_ref: str, evals_json: Path) -> str:
@@ -449,9 +502,14 @@ def build_executor_envelope(
     skill_path: Path | None,
     prompt: str,
     files: list[str],
-    outputs_dir: Path,
+    outputs_dir: str,
 ) -> str:
-    """Construct the executor prompt: skill hint + outputs hint + input files + user prompt."""
+    """Construct the executor prompt: skill hint + outputs hint + input files + user prompt.
+
+    `files` and `outputs_dir` are relative paths inside the executor's cwd
+    (staged by run_executor). `skill_path`, when set, is still absolute — current
+    config explicitly mounts the live skill, so its location is part of the contract.
+    """
     lines = []
     if skill_path:
         lines.append(f"Use the skill at {skill_path}. Save any outputs to {outputs_dir}/.")
@@ -477,25 +535,34 @@ def run_executor(
 ) -> dict:
     """Run one executor subprocess; write timing.json; return result dict."""
     run_dir.mkdir(parents=True, exist_ok=True)
-    outputs_dir = (run_dir / "outputs").resolve()
-    outputs_dir.mkdir(exist_ok=True)
+    run_outputs = (run_dir / "outputs").resolve()
+    run_outputs.mkdir(exist_ok=True)
     transcript = run_dir / "transcript.jsonl"
     stderr = run_dir / "stderr.log"
 
-    envelope = build_executor_envelope(skill_path, prompt, files, outputs_dir)
     iso_cwd = _isolated_cwd(run_dir)
+    iso_outputs = iso_cwd / "outputs"
+    if iso_outputs.exists():
+        shutil.rmtree(iso_outputs)
+    iso_outputs.mkdir(parents=True)
+    relative_files = _stage_inputs(iso_cwd, files)
 
-    start_iso, start_wall = _now_iso(), time.time()
+    envelope = build_executor_envelope(skill_path, prompt, relative_files, "outputs")
+
     spawn = run_opencode if executor == EXECUTOR_OPENCODE else run_claude_p
-    exit_code, timed_out = spawn(
-        prompt=envelope,
-        cwd=iso_cwd,
-        transcript_path=transcript,
-        stderr_path=stderr,
-        timeout=timeout,
-        model=model,
-        env_overrides=env_overrides,
-    )
+    start_iso, start_wall = _now_iso(), time.time()
+    try:
+        exit_code, timed_out = spawn(
+            prompt=envelope,
+            cwd=iso_cwd,
+            transcript_path=transcript,
+            stderr_path=stderr,
+            timeout=timeout,
+            model=model,
+            env_overrides=env_overrides,
+        )
+    finally:
+        _collect_outputs(iso_outputs, run_outputs)
     end_wall, end_iso = time.time(), _now_iso()
 
     if executor == EXECUTOR_OPENCODE:
