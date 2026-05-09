@@ -74,6 +74,14 @@ const bodySchema = z.object({
   // in via the prompt_template field, even when that file lives outside
   // the evals directory.
   eval_metadata: z.array(z.any()).optional(),
+  // Resolved runtime + model the runner used. Lifted from manifest.json on
+  // upload so each iteration row can answer "what model produced these
+  // numbers". Stored as opaque strings — the runner picks the canonical
+  // form (`anthropic/claude-opus-4-7` for opencode, plain id for claude).
+  executor: z.string().min(1).max(200).optional(),
+  executor_model: z.string().min(1).max(200).optional(),
+  grader_executor: z.string().min(1).max(200).optional(),
+  grader_model: z.string().min(1).max(200).optional(),
 });
 
 type Body = z.infer<typeof bodySchema>;
@@ -206,6 +214,10 @@ export async function POST(request: Request) {
     evals_definition,
     skill_files,
     eval_metadata,
+    executor,
+    executor_model,
+    grader_executor,
+    grader_model,
   } = parsed;
 
   const iterSummary = extractIterationSummary(benchmark);
@@ -226,10 +238,17 @@ export async function POST(request: Request) {
       const skillId = skillRow.id;
 
       // 2. upsert iteration (latest wins)
+      const modelFields = {
+        executor: executor ?? null,
+        executorModel: executor_model ?? null,
+        graderExecutor: grader_executor ?? null,
+        graderModel: grader_model ?? null,
+      };
       const iterationValues = {
         skillId,
         iterationNumber: iteration_number,
         ...iterSummary,
+        ...modelFields,
         skillMdSnapshot: skill_md ?? null,
         gitCommitSha: git_commit_sha ?? null,
         hostname: hostname ?? null,
@@ -246,6 +265,7 @@ export async function POST(request: Request) {
           target: [schema.iterations.skillId, schema.iterations.iterationNumber],
           set: {
             ...iterSummary,
+            ...modelFields,
             skillMdSnapshot: skill_md ?? null,
             gitCommitSha: git_commit_sha ?? null,
             hostname: hostname ?? null,

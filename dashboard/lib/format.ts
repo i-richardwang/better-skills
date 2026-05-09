@@ -76,3 +76,16 @@ export function shortSha(sha: string | null | undefined): string {
   if (!sha) return "—";
   return sha.slice(0, 7);
 }
+
+// Render an executor/grader runtime + model pair the way the iteration page
+// shows it: "model (runtime)" when both exist, just one of them when the
+// other is missing, "—" when neither was recorded.
+export function fmtRuntime(
+  runtime: string | null | undefined,
+  model: string | null | undefined,
+): string {
+  if (model && runtime) return `${model} (${runtime})`;
+  if (model) return model;
+  if (runtime) return runtime;
+  return "—";
+}

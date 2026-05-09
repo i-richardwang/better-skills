@@ -8,6 +8,7 @@ import {
   fmtInt,
   fmtPct,
   fmtRelative,
+  fmtRuntime,
   fmtSeconds,
   fmtTokens,
   shortSha,
@@ -85,6 +86,11 @@ export default async function IterationPage({
             {iter.evalsCount ?? "—"} evals · {iter.runsPerConfiguration ?? "—"}{" "}
             runs/config
           </Badge>
+          {iter.executorModel ? (
+            <Badge variant="secondary" title={iter.executor ? `executor: ${iter.executor}` : undefined}>
+              {iter.executorModel}
+            </Badge>
+          ) : null}
           {iter.gitCommitSha ? (
             <Badge variant="secondary">commit {shortSha(iter.gitCommitSha)}</Badge>
           ) : null}
@@ -179,6 +185,30 @@ export default async function IterationPage({
         </section>
 
         <aside className="space-y-6">
+          {(iter.executor ||
+            iter.executorModel ||
+            iter.graderExecutor ||
+            iter.graderModel) ? (
+            <Card>
+              <CardHeader>
+                <CardEyebrow>Runtime</CardEyebrow>
+                <CardTitle className="text-base">
+                  Executor &amp; grader
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <KV
+                  label="Executor"
+                  value={fmtRuntime(iter.executor, iter.executorModel)}
+                />
+                <KV
+                  label="Grader"
+                  value={fmtRuntime(iter.graderExecutor, iter.graderModel)}
+                />
+              </CardContent>
+            </Card>
+          ) : null}
+
           <Card>
             <CardHeader>
               <CardEyebrow>Resource usage</CardEyebrow>

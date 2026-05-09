@@ -60,6 +60,14 @@ export const iterations = pgTable(
     runsPerConfiguration: integer("runs_per_configuration"),
     evalsCount: integer("evals_count"),
 
+    // Resolved at plan time by the runner and lifted from manifest.json on
+    // upload. Captures what actually ran (executor + model + grader). Null on
+    // iterations uploaded before the runner tracked these fields.
+    executor: text("executor"),
+    executorModel: text("executor_model"),
+    graderExecutor: text("grader_executor"),
+    graderModel: text("grader_model"),
+
     notes: text("notes").array(),
     skillMdSnapshot: text("skill_md_snapshot"),
     gitCommitSha: text("git_commit_sha"),

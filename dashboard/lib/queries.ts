@@ -79,6 +79,10 @@ export type IterationPoint = {
   baselineTimeSecondsMean: number | null;
   runsPerConfiguration: number | null;
   evalsCount: number | null;
+  executor: string | null;
+  executorModel: string | null;
+  graderExecutor: string | null;
+  graderModel: string | null;
   gitCommitSha: string | null;
   hostname: string | null;
   uploadedAt: Date;
@@ -130,6 +134,10 @@ export async function getSkillTrajectory(
       baselineTimeSecondsMean: it.baselineTimeSecondsMean,
       runsPerConfiguration: it.runsPerConfiguration,
       evalsCount: it.evalsCount,
+      executor: it.executor,
+      executorModel: it.executorModel,
+      graderExecutor: it.graderExecutor,
+      graderModel: it.graderModel,
       gitCommitSha: it.gitCommitSha,
       hostname: it.hostname,
       uploadedAt: it.uploadedAt,
@@ -282,6 +290,10 @@ export type IterationDetail = {
   baselineTimeSecondsMean: number | null;
   runsPerConfiguration: number | null;
   evalsCount: number | null;
+  executor: string | null;
+  executorModel: string | null;
+  graderExecutor: string | null;
+  graderModel: string | null;
   notes: string[] | null;
   skillMdSnapshot: string | null;
   skillFiles: Record<string, string> | null;
@@ -371,6 +383,10 @@ export async function getIterationDetail(
     baselineTimeSecondsMean: iter.baselineTimeSecondsMean,
     runsPerConfiguration: iter.runsPerConfiguration,
     evalsCount: iter.evalsCount,
+    executor: iter.executor,
+    executorModel: iter.executorModel,
+    graderExecutor: iter.graderExecutor,
+    graderModel: iter.graderModel,
     notes: iter.notes,
     skillMdSnapshot: iter.skillMdSnapshot,
     skillFiles: asSkillFiles(iter.skillFiles),
