@@ -329,6 +329,8 @@ def _build_manifest_skeleton(
     runs: list[dict],
     iteration_dir: Path,
     executor: str = EXECUTOR_CLAUDE,
+    grader_executor: str | None = None,
+    grader_model: str | None = None,
 ) -> dict:
     """Construct the initial manifest with all planned runs marked pending."""
     return {
@@ -342,6 +344,8 @@ def _build_manifest_skeleton(
         "evals_json_path": str(evals_json),
         "model": model,
         "executor": executor,
+        "grader_model": grader_model,
+        "grader_executor": grader_executor,
         "configs": [CONFIG_CURRENT, CONFIG_BASELINE],
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
@@ -1036,6 +1040,16 @@ def run_all(
     skill_name = skill_name or config.skill_name or skill_path.name
     model = config.default_model
     executor = config.executor
+    grader_executor = config.grader_executor
+    # Mirrors the runtime fallback in run_phase_grader: if grader_model is set
+    # explicitly, use it; otherwise reuse executor model only when both phases
+    # share a runtime; otherwise let the grader CLI choose its own default.
+    if config.grader_model is not None:
+        grader_model: str | None = config.grader_model
+    elif grader_executor == executor:
+        grader_model = model
+    else:
+        grader_model = None
 
     baseline_spec = baseline if baseline is not None else config.defaults.default_baseline
     validate_baseline_spec(baseline_spec)
@@ -1082,6 +1096,8 @@ def run_all(
         runs=runs,
         iteration_dir=iteration_dir,
         executor=executor,
+        grader_executor=grader_executor,
+        grader_model=grader_model,
     )
     _refresh_manifest_runs(iteration_dir, manifest)
     manifest_path = _write_manifest(iteration_dir, manifest)
@@ -1129,13 +1145,6 @@ def run_all(
                 f"or reinstall with `pip install -e .` to populate scripts/data/."
             )
         grader_system_prompt = grader_md_path.read_text()
-        grader_executor = config.grader_executor
-        if config.grader_model is not None:
-            grader_model = config.grader_model
-        elif grader_executor == executor:
-            grader_model = model
-        else:
-            grader_model = None
         grader_results = run_phase_grader(
             executor_results=executor_results,
             grader_system_prompt=grader_system_prompt,

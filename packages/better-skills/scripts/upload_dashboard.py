@@ -259,6 +259,17 @@ def build_payload(
         "hostname": socket.gethostname(),
     }
 
+    # Lift the resolved executor / grader runtime + model from the runner's
+    # manifest so each iteration row records what actually ran. Iterations
+    # uploaded before manifest tracked these fields simply omit them.
+    manifest = _read_json(benchmark_dir / "manifest.json")
+    if isinstance(manifest, dict):
+        for key in ("executor", "model", "grader_executor", "grader_model"):
+            value = manifest.get(key)
+            if isinstance(value, str) and value:
+                payload_key = "executor_model" if key == "model" else key
+                payload[payload_key] = value
+
     if skill_path:
         skill_md = skill_path / "SKILL.md"
         if skill_md.exists():
