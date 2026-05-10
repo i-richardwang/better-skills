@@ -334,8 +334,8 @@ kill <viewer_pid> 2>/dev/null
 `iterate` is a thin orchestrator over `better-skills`'s other subcommands. They stay supported for finer control:
 
 - **Scaffold a skill's eval configs**: `better-skills init <skill-path>` — writes a starter `evals.json` + `triggers.json`.
-- **Just re-run the executor**: `better-skills run --skill-path … --workspace … --iteration N --phase executor`. Use `--resume` to skip runs whose transcript already shows success.
-- **Just re-grade** without re-executing (e.g., after editing assertions): `better-skills run … --phase grader --resume`. Already-graded runs are skipped.
+- **Just re-run the executor**: `better-skills iterate --skill-path … --workspace … --iteration N --phase executor`. Use `--resume` to skip runs whose transcript already shows success.
+- **Just re-grade** without re-executing (e.g., after editing assertions): `better-skills iterate … --phase grader --resume`. Already-graded runs are skipped.
 - **Re-aggregate** an existing iteration: `better-skills aggregate <workspace>/iteration-N`. The iteration's `manifest.json` is required.
 - **Manual dashboard upload**: `better-skills upload <workspace>/iteration-N --skill-name <name> --iteration N --skill-path <path>`. Requires `SKILL_DASHBOARD_URL` + `SKILL_DASHBOARD_TOKEN` env or `--dashboard-url`/`--token` flags.
 - **Standalone viewer**: `better-skills view <workspace>/iteration-N` — same as what `iterate` runs in the background.
