@@ -180,6 +180,18 @@ function buildBenchmarkRunMap(benchmark: unknown) {
 // future fields by default.
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
+class IterationConflictError extends Error {
+  constructor(
+    public readonly skillName: string,
+    public readonly iterationNumber: number,
+  ) {
+    super(
+      `iteration ${iterationNumber} of '${skillName}' already exists; pass force=1 to overwrite`,
+    );
+    this.name = "IterationConflictError";
+  }
+}
+
 export async function POST(request: Request) {
   const auth = checkUploadAuth(request);
   if (!auth.ok) {
@@ -223,6 +235,15 @@ export async function POST(request: Request) {
   const iterSummary = extractIterationSummary(benchmark);
   const benchmarkRunMap = buildBenchmarkRunMap(benchmark);
 
+  // `?force=1` opts in to the legacy upsert. Without it, an upload to a
+  // (skill, iteration) that already exists is rejected with 409 — guards
+  // against fresh-device runs whose iteration counter restarted at 1 and
+  // would otherwise silently overwrite the historical iteration. The CLI
+  // sets force=1 only when re-uploading from the same workspace that
+  // produced the original upload (verified via local marker file).
+  const forceFlag = new URL(request.url).searchParams.get("force");
+  const force = forceFlag === "1" || forceFlag === "true";
+
   try {
     const result = await db.transaction(async (tx) => {
       // 1. upsert skill
@@ -236,6 +257,22 @@ export async function POST(request: Request) {
         .returning({ id: schema.skills.id });
 
       const skillId = skillRow.id;
+
+      // Conflict gate: reject re-uploads of an existing (skill, iteration)
+      // unless `?force=1` was passed. Runs in the transaction so a parallel
+      // upload of the same iteration can't slip past the check.
+      if (!force) {
+        const existing = await tx.query.iterations.findFirst({
+          where: and(
+            eq(schema.iterations.skillId, skillId),
+            eq(schema.iterations.iterationNumber, iteration_number),
+          ),
+          columns: { id: true },
+        });
+        if (existing) {
+          throw new IterationConflictError(skill_name, iteration_number);
+        }
+      }
 
       // 2. upsert iteration (latest wins)
       const modelFields = {
@@ -343,6 +380,17 @@ export async function POST(request: Request) {
       runs_ingested: incomingRuns.length,
     });
   } catch (err) {
+    if (err instanceof IterationConflictError) {
+      return NextResponse.json(
+        {
+          error: "Iteration already exists",
+          detail: err.message,
+          skill_name: err.skillName,
+          iteration_number: err.iterationNumber,
+        },
+        { status: 409 },
+      );
+    }
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(
       { error: "Upload failed", detail: message },
