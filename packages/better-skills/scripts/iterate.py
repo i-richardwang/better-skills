@@ -123,6 +123,7 @@ def run_iteration(args: argparse.Namespace) -> dict:
                 iteration_number=args.iteration,
                 skill_path=skill_path,
                 evals_json=evals_json,
+                force=getattr(args, "force", False),
             )
         except Exception as e:
             print(f"[dashboard] hook skipped: {e}", file=sys.stderr)

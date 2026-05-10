@@ -180,6 +180,8 @@ def resolve_baseline(
 
     if spec == "previous":
         if iteration <= 1:
+            # Iteration 1 has no predecessor by definition — this is a
+            # legitimate degradation, not a missing-snapshot situation.
             print(
                 f"[baseline] iteration {iteration} has no previous; degrading to 'none'",
                 file=sys.stderr, flush=True,
@@ -187,11 +189,19 @@ def resolve_baseline(
             return None, "none"
         prev_state = workspace / f"iteration-{iteration - 1}" / "skill-state"
         if not prev_state.exists():
-            print(
-                f"[baseline] {prev_state} not found; degrading to 'none'",
-                file=sys.stderr, flush=True,
+            # Hard error rather than silent degrade — multi-device flows
+            # routinely land here (workspace not synced) and the old behavior
+            # silently compared `current` against a bare model, masking real
+            # regressions. Make the user pick explicitly.
+            raise FileNotFoundError(
+                f"baseline 'previous' resolves to {prev_state}, but it doesn't exist. "
+                f"The skill-state snapshot for iteration {iteration - 1} is usually "
+                f"created locally at the end of that iteration's run; if you switched "
+                f"machines or wiped the workspace, the snapshot is gone. To proceed, "
+                f"pick one explicitly: `--baseline none` (compare against bare model), "
+                f"`--baseline iteration-K` (some K that exists locally), or sync the "
+                f"workspace from the machine that produced iteration {iteration - 1}."
             )
-            return None, "none"
         return prev_state.resolve(), f"iteration-{iteration - 1}"
 
     if spec.startswith("iteration-"):

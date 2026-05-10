@@ -26,6 +26,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 from . import (
     aggregate_benchmark,
@@ -86,6 +87,70 @@ def _triggers_template(skill_name: str) -> dict:
     ).model_dump(exclude_none=True)
 
 
+def _max_local_iteration(workspace: Path) -> int:
+    """Highest N for which `<workspace>/iteration-N/` exists locally. Zero
+    when the workspace is fresh or doesn't yet exist. Skips entries that
+    don't match the iteration-<int> pattern so unrelated siblings can't
+    poison the count."""
+    if not workspace.exists():
+        return 0
+    highest = 0
+    for child in workspace.iterdir():
+        if not child.is_dir() or not child.name.startswith("iteration-"):
+            continue
+        try:
+            n = int(child.name.split("-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if n > highest:
+            highest = n
+    return highest
+
+
+def _max_dashboard_iteration(skill_name: str) -> Optional[int]:
+    """Probe the dashboard for the skill's latest iteration. Returns None
+    when env vars are unset, the skill is unknown (404), or the request
+    fails — callers fall back to the local count in those cases. Never
+    raises so iteration inference stays usable on flaky networks."""
+    url = os.environ.get("SKILL_DASHBOARD_URL")
+    token = os.environ.get("SKILL_DASHBOARD_TOKEN")
+    if not url or not token or not skill_name:
+        return None
+    try:
+        return upload_dashboard.fetch_latest_iteration(url, token, skill_name)
+    except Exception as e:
+        print(
+            f"[iteration] dashboard probe failed: {type(e).__name__}: {e}; "
+            f"falling back to local count",
+            file=sys.stderr,
+        )
+        return None
+
+
+def resolve_iteration_number(
+    explicit: Optional[int], workspace: Path, skill_name: str
+) -> int:
+    """Pick the iteration number for this run.
+
+    Honors `--iteration` when set. Otherwise infers `max(local, dashboard) + 1`
+    so a fresh-device workspace continues the dashboard's history instead of
+    silently overwriting iteration 1. Falls back to local-only when the
+    dashboard is unreachable, and to 1 when both signals are absent."""
+    if explicit is not None:
+        return explicit
+
+    local = _max_local_iteration(workspace)
+    remote = _max_dashboard_iteration(skill_name)
+    base = max(local, remote) if remote is not None else local
+    inferred = base + 1
+    print(
+        f"[iteration] inferred {inferred} (local max={local}, "
+        f"dashboard max={remote if remote is not None else 'unknown'})",
+        file=sys.stderr,
+    )
+    return inferred
+
+
 def cmd_init(args: argparse.Namespace) -> dict:
     skill_path = Path(args.skill_path).resolve()
     if not skill_path.exists():
@@ -134,6 +199,9 @@ def cmd_run(args: argparse.Namespace) -> dict:
     )
     if args.baseline is not None:
         validate_baseline_spec(args.baseline)
+    args.iteration = resolve_iteration_number(
+        args.iteration, workspace, args.skill_name or skill_path.name
+    )
     return run_functional_eval.run_all(
         evals_json=evals_json,
         skill_path=skill_path,
@@ -176,6 +244,11 @@ def cmd_aggregate(args: argparse.Namespace) -> dict:
 
 
 def cmd_iterate(args: argparse.Namespace) -> dict:
+    workspace = Path(args.workspace).resolve()
+    skill_path = Path(args.skill_path).resolve()
+    args.iteration = resolve_iteration_number(
+        args.iteration, workspace, args.skill_name or skill_path.name
+    )
     return iterate.run_iteration(args)
 
 
@@ -255,7 +328,22 @@ def cmd_upload(args: argparse.Namespace) -> dict:
         args.skill_path,
         evals_json,
     )
-    result = upload_dashboard.upload(args.dashboard_url, args.token, payload)
+    effective_force = args.force or upload_dashboard.has_local_upload_marker(
+        args.benchmark_dir, args.skill_name, iteration
+    )
+    try:
+        result = upload_dashboard.upload(
+            args.dashboard_url, args.token, payload, force=effective_force
+        )
+    except upload_dashboard.IterationConflictError as e:
+        raise SystemExit(
+            f"upload rejected: {e}. "
+            f"Re-run with `--force` to overwrite, or with `--iteration <N+1>` to "
+            f"pick a fresh number."
+        )
+    upload_dashboard.write_upload_marker(
+        args.benchmark_dir, args.skill_name, iteration
+    )
     return {"status": "ok", **(result if isinstance(result, dict) else {})}
 
 
@@ -279,7 +367,11 @@ def build_parser() -> argparse.ArgumentParser:
     def _add_run_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--skill-path", required=True)
         p.add_argument("--workspace", required=True)
-        p.add_argument("--iteration", type=int, required=True)
+        p.add_argument("--iteration", type=int, default=None,
+                       help="Iteration number. When omitted, inferred from the "
+                            "highest existing iteration-N/ in --workspace and the "
+                            "dashboard's latest iteration (if SKILL_DASHBOARD_URL "
+                            "is set), then incremented by 1.")
         p.add_argument("--evals-json", default=None)
         p.add_argument("--baseline", default=None,
                        help="Override default_baseline. Grammar: none | previous | iteration-N | path:/abs/path.")
@@ -289,6 +381,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--phase", choices=["all", "executor", "grader"], default="all")
         p.add_argument("--resume", action="store_true")
         p.add_argument("--skill-name", default=None)
+        p.add_argument("--force", action="store_true",
+                       help="Overwrite an existing dashboard upload for the same "
+                            "(skill, iteration). Default: rejected with a 409.")
 
     # run
     sp = sub.add_parser("run", help="Run executors + graders for one iteration.")
@@ -387,6 +482,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "Required when the file is not named evals.json or lives outside the skill dir.")
     sp.add_argument("--dashboard-url", default=os.environ.get("SKILL_DASHBOARD_URL"))
     sp.add_argument("--token", default=os.environ.get("SKILL_DASHBOARD_TOKEN"))
+    sp.add_argument("--force", action="store_true",
+                    help="Overwrite an existing dashboard upload for the same "
+                         "(skill, iteration). Default: rejected with a 409.")
     sp.set_defaults(handler=cmd_upload)
 
     return p

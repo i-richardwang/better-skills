@@ -22,6 +22,7 @@ import socket
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -295,8 +296,31 @@ def build_payload(
     return payload
 
 
-def upload(dashboard_url: str, token: str, payload: dict, timeout: float = 30.0) -> dict:
+class IterationConflictError(Exception):
+    """Raised when the dashboard rejects an upload because the (skill, iteration)
+    pair already exists and force was not set. Distinct from generic HTTP
+    errors so callers can prompt the user to re-run with --force."""
+
+    def __init__(self, skill_name: str, iteration_number: int, detail: str = ""):
+        self.skill_name = skill_name
+        self.iteration_number = iteration_number
+        self.detail = detail
+        super().__init__(
+            f"iteration {iteration_number} of '{skill_name}' already exists on dashboard"
+            + (f": {detail}" if detail else "")
+        )
+
+
+def upload(
+    dashboard_url: str,
+    token: str,
+    payload: dict,
+    timeout: float = 30.0,
+    force: bool = False,
+) -> dict:
     url = dashboard_url.rstrip("/") + "/api/uploads"
+    if force:
+        url += "?force=1"
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -307,8 +331,99 @@ def upload(dashboard_url: str, token: str, payload: dict, timeout: float = 30.0)
             "Authorization": f"Bearer {token}",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8")
+            except Exception:
+                pass
+            raise IterationConflictError(
+                payload.get("skill_name", ""),
+                int(payload.get("iteration_number", -1)),
+                detail,
+            ) from None
+        raise
+
+
+def fetch_latest_iteration(
+    dashboard_url: str,
+    token: str,
+    skill_name: str,
+    timeout: float = 10.0,
+) -> Optional[int]:
+    """GET /api/skills/<name>/latest-iteration. Returns the highest known
+    iteration number for the skill, None when the skill is unknown (404), and
+    raises on other transport errors so callers can decide whether to fail
+    soft or surface the issue."""
+    if not skill_name:
+        return None
+    safe_name = urllib.parse.quote(skill_name, safe="")
+    url = dashboard_url.rstrip("/") + f"/api/skills/{safe_name}/latest-iteration"
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    n = data.get("latest_iteration_number") if isinstance(data, dict) else None
+    return int(n) if isinstance(n, int) else None
+
+
+# Marker name written into iteration-N/ on first successful upload. Lets
+# subsequent re-uploads from the same workspace (resume, --phase grader,
+# manual re-aggregate + upload) bypass the dashboard's conflict gate, while
+# uploads from a freshly-recreated workspace still trip the gate.
+_UPLOAD_MARKER = ".dashboard_uploaded.json"
+
+
+def _marker_path(iteration_dir: Path) -> Path:
+    return iteration_dir / _UPLOAD_MARKER
+
+
+def has_local_upload_marker(
+    iteration_dir: Path, skill_name: str, iteration_number: int
+) -> bool:
+    """True when the iteration_dir was previously uploaded for this exact
+    (skill, iteration). Mismatch on either field means a different identity
+    is being written on top of an existing local dir — treat as no-marker so
+    the conflict gate can fire."""
+    data = _read_json(_marker_path(iteration_dir))
+    if not isinstance(data, dict):
+        return False
+    return (
+        data.get("skill_name") == skill_name
+        and data.get("iteration_number") == iteration_number
+    )
+
+
+def write_upload_marker(
+    iteration_dir: Path, skill_name: str, iteration_number: int
+) -> None:
+    """Persist the (skill, iteration) identity of the latest successful upload
+    so future re-uploads from this workspace are recognized as same-source."""
+    try:
+        _marker_path(iteration_dir).write_text(
+            json.dumps(
+                {
+                    "skill_name": skill_name,
+                    "iteration_number": iteration_number,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    except OSError:
+        pass
 
 
 def upload_from_env(
@@ -317,8 +432,15 @@ def upload_from_env(
     iteration_number: int,
     skill_path: Optional[Path] = None,
     evals_json: Optional[Path] = None,
+    force: bool = False,
 ) -> bool:
-    """Fail-soft upload: returns True on success, False on skip/failure. Never raises."""
+    """Fail-soft upload: returns True on success, False on skip/failure. Never raises.
+
+    `force=True` overrides the dashboard's conflict gate. Otherwise the gate
+    is bypassed only when this iteration_dir was previously uploaded for the
+    same (skill, iteration) — proven by the local marker file. A 409 response
+    surfaces in stderr with explicit re-run guidance so the user can decide
+    whether to overwrite or pick a different iteration number."""
     if os.environ.get("SKILL_DASHBOARD_DISABLED"):
         return False
     url = os.environ.get("SKILL_DASHBOARD_URL")
@@ -329,18 +451,33 @@ def upload_from_env(
         print("[dashboard] skipped: skill_name is empty", file=sys.stderr)
         return False
 
+    effective_force = force or has_local_upload_marker(
+        benchmark_dir, skill_name, iteration_number
+    )
+
     try:
         payload = build_payload(
             benchmark_dir, skill_name, iteration_number, skill_path, evals_json
         )
-        result = upload(url, token, payload)
+        result = upload(url, token, payload, force=effective_force)
         ingested = result.get("runs_ingested", 0) if isinstance(result, dict) else 0
+        write_upload_marker(benchmark_dir, skill_name, iteration_number)
         print(
             f"[dashboard] uploaded '{skill_name}' iteration {iteration_number} "
             f"({ingested} runs) → {url}",
             file=sys.stderr,
         )
         return True
+    except IterationConflictError as e:
+        print(
+            f"[dashboard] upload rejected: {e}. "
+            f"This usually means the workspace was wiped or you switched machines, "
+            f"and the iteration counter restarted on top of an existing upload. "
+            f"Re-run with `--force` to overwrite, or with `--iteration <N+1>` to "
+            f"pick a fresh number.",
+            file=sys.stderr,
+        )
+        return False
     except urllib.error.HTTPError as e:
         detail = ""
         try:
