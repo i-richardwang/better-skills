@@ -281,10 +281,26 @@ def _read_grading_summary(run_dir: Path) -> dict | None:
 
 
 def _executor_completed(run_dir: Path) -> bool:
-    """True when the executor produced a usable transcript with a final event."""
+    """True when the executor finished cleanly and left a non-empty transcript.
+
+    opencode `run --format json` has no in-band completion event — its loop
+    breaks on session.status=idle without emitting to stdout, then the
+    process exits. Subprocess rc is the only reliable signal, so trust the
+    status the runner already wrote from it. End-of-stream marker shape
+    (step_finish reason='stop', a final 'result' event) varies by opencode
+    version and CLI flags (--dir suppresses the closing step_finish), so a
+    transcript-marker check is a fragile second source of truth.
+    """
     transcript = run_dir / "transcript.jsonl"
     if not transcript.exists() or transcript.stat().st_size == 0:
         return False
+
+    status = _read_run_status(run_dir)
+    if status:
+        return status.get("status") in (STATUS_EXECUTED, STATUS_GRADED)
+
+    # Legacy fallback for runs missing run_status.json: any well-formed JSON
+    # event proves the executor wrote something the grader can chew on.
     try:
         with open(transcript) as f:
             for line in f:
@@ -292,14 +308,10 @@ def _executor_completed(run_dir: Path) -> bool:
                 if not line:
                     continue
                 try:
-                    ev = json.loads(line)
+                    json.loads(line)
+                    return True
                 except json.JSONDecodeError:
                     continue
-                if ev.get("type") == "result":
-                    return True
-                if ev.get("type") == "step_finish":
-                    if (ev.get("part") or {}).get("reason") == "stop":
-                        return True
     except OSError:
         return False
     return False
