@@ -22,6 +22,7 @@ from pathlib import Path
 def build_opencode_cmd(
     model: str | None,
     prompt: str,
+    cwd: Path,
 ) -> list[str]:
     """Construct the opencode argv. Prompt is the last positional arg.
 
@@ -29,12 +30,17 @@ def build_opencode_cmd(
     can't field interactive permission asks from a subprocess).
     --pure skips external opencode plugins so the eval subprocess runs with
     a clean tool surface, regardless of what the user has configured globally.
+    --dir is the agent's working directory. opencode does NOT inherit the
+    Python subprocess's cwd — its server/agent decides its own cwd, so the
+    runner's staged iso_cwd/inputs/ and iso_cwd/outputs/ are only visible to
+    the agent when we pin --dir explicitly.
     """
     cmd = [
         "opencode", "run",
         "--format", "json",
         "--dangerously-skip-permissions",
         "--pure",
+        "--dir", str(cwd),
     ]
     if model:
         cmd.extend(["--model", model])
@@ -62,7 +68,7 @@ def run_opencode(
             "or use --executor claude."
         )
 
-    cmd = build_opencode_cmd(model=model, prompt=prompt)
+    cmd = build_opencode_cmd(model=model, prompt=prompt, cwd=cwd)
 
     # Drop CLAUDECODE so an outer Claude Code session doesn't bleed into the
     # child; merge the per-run overrides on top. Same pattern as run_claude_p.
