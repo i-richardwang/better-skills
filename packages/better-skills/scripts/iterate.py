@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from . import aggregate_benchmark, run_functional_eval
-from .config import find_evals_config, validate_skill_workspace
+from .config import validate_skill_workspace
 from .upload_dashboard import upload_from_env
 
 
@@ -77,10 +77,7 @@ def run_iteration(args: argparse.Namespace) -> dict:
     workspace = Path(args.workspace).resolve()
     validate_skill_workspace(skill_path, workspace)
     skill_name = args.skill_name or skill_path.name
-    evals_json = (
-        Path(args.evals_json).resolve() if args.evals_json
-        else find_evals_config(skill_path).resolve()
-    )
+    evals_json = Path(args.evals_json).resolve()
     if not evals_json.exists():
         raise FileNotFoundError(f"evals.json not found at {evals_json}")
 

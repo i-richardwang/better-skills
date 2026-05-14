@@ -4,7 +4,8 @@
 Subcommands:
 
   Functional pipeline (test what the skill produces):
-    init           Scaffold evals.json + triggers.json templates in a skill dir.
+    init           Scaffold triggers.json inside a skill directory.
+    init-evals     Scaffold evals.json into a separate harness directory.
     run            Run executors + graders for one iteration; writes manifest.
     aggregate      Roll per-run grading.json files into benchmark.json + .md.
     iterate        Full pipeline: run + aggregate + upload + view (recommended).
@@ -45,7 +46,6 @@ from .config import (
     FunctionalDefaults,
     TriggerQuery,
     TriggersConfig,
-    find_evals_config,
     validate_baseline_spec,
     validate_skill_workspace,
 )
@@ -152,38 +152,42 @@ def resolve_iteration_number(
 
 
 def cmd_init(args: argparse.Namespace) -> dict:
+    """Scaffold triggers.json inside the skill directory."""
     skill_path = Path(args.skill_path).resolve()
     if not skill_path.exists():
         raise SystemExit(f"skill path not found: {skill_path}")
-
-    created: list[str] = []
-    skipped: list[str] = []
-
-    evals_path = skill_path / "evals.json"
-    if evals_path.exists() and not args.force:
-        skipped.append(str(evals_path))
-    else:
-        evals_path.write_text(json.dumps(_evals_template(skill_path.name), indent=2) + "\n")
-        created.append(str(evals_path))
-
     triggers_path = skill_path / "triggers.json"
     if triggers_path.exists() and not args.force:
-        skipped.append(str(triggers_path))
-    else:
-        triggers_path.write_text(json.dumps(_triggers_template(skill_path.name), indent=2) + "\n")
-        created.append(str(triggers_path))
+        return {"status": "ok", "created": [], "skipped": [str(triggers_path)]}
+    triggers_path.write_text(json.dumps(_triggers_template(skill_path.name), indent=2) + "\n")
+    print(
+        f"[init] Next: `better-skills init-evals {skill_path}-evals --skill-path {skill_path}`.",
+        file=sys.stderr, flush=True,
+    )
+    return {"status": "ok", "created": [str(triggers_path)], "skipped": []}
 
-    if created:
-        print(
-            "[init] If your skill touches external mutable state "
-            "(database, browser, sandbox, webhook receiver, port), "
-            "see references/evals-schema.md → \"Advanced: per_run_setup\" "
-            "for symptom-led recipes. Most skills don't need it.",
-            file=sys.stderr,
-            flush=True,
+
+def cmd_init_evals(args: argparse.Namespace) -> dict:
+    """Scaffold evals.json into a dedicated harness directory outside the skill."""
+    evals_dir = Path(args.evals_dir).resolve()
+    skill_path = Path(args.skill_path).resolve()
+    if not skill_path.exists():
+        raise SystemExit(f"skill path not found: {skill_path}")
+    if evals_dir == skill_path or skill_path in evals_dir.parents:
+        raise SystemExit(
+            f"--evals-dir must not be inside --skill-path; place it as a sibling like {skill_path}-evals/."
         )
-
-    return {"status": "ok", "created": created, "skipped": skipped}
+    evals_path = evals_dir / "evals.json"
+    if evals_path.exists() and not args.force:
+        return {"status": "ok", "created": [], "skipped": [str(evals_path)]}
+    evals_dir.mkdir(parents=True, exist_ok=True)
+    evals_path.write_text(json.dumps(_evals_template(skill_path.name), indent=2) + "\n")
+    print(
+        "[init-evals] For external mutable state (db/browser/port/...), "
+        "see references/evals-schema.md → \"Advanced: per_run_setup\".",
+        file=sys.stderr, flush=True,
+    )
+    return {"status": "ok", "created": [str(evals_path)], "skipped": []}
 
 
 # --- run --------------------------------------------------------------------
@@ -193,10 +197,7 @@ def cmd_run(args: argparse.Namespace) -> dict:
     skill_path = Path(args.skill_path).resolve()
     workspace = Path(args.workspace).resolve()
     validate_skill_workspace(skill_path, workspace)
-    evals_json = (
-        Path(args.evals_json).resolve() if args.evals_json
-        else find_evals_config(skill_path).resolve()
-    )
+    evals_json = Path(args.evals_json).resolve()
     if args.baseline is not None:
         validate_baseline_spec(args.baseline)
     args.iteration = resolve_iteration_number(
@@ -357,11 +358,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="command", required=True, metavar="<command>")
 
-    # init
-    sp = sub.add_parser("init", help="Scaffold evals.json + triggers.json templates.")
+    # init — product-side scaffolding only (triggers.json in the skill dir).
+    sp = sub.add_parser("init", help="Scaffold triggers.json inside a skill directory.")
     sp.add_argument("skill_path")
     sp.add_argument("--force", action="store_true", help="Overwrite existing files.")
     sp.set_defaults(handler=cmd_init)
+
+    # init-evals — test-harness scaffolding (evals.json in its own directory).
+    sp = sub.add_parser(
+        "init-evals",
+        help="Scaffold evals.json into a dedicated harness directory outside the skill.",
+    )
+    sp.add_argument("evals_dir",
+                    help="Directory to create/use for the evals harness (e.g. "
+                         "<skill-path>-evals). Created if it doesn't exist.")
+    sp.add_argument("--skill-path", required=True,
+                    help="Path to the skill this harness tests; used to derive "
+                         "skill_name in the template and to reject nesting the "
+                         "harness inside the skill.")
+    sp.add_argument("--force", action="store_true", help="Overwrite existing files.")
+    sp.set_defaults(handler=cmd_init_evals)
 
     # run / iterate share the executor flag set
     def _add_run_args(p: argparse.ArgumentParser) -> None:
@@ -372,7 +388,9 @@ def build_parser() -> argparse.ArgumentParser:
                             "highest existing iteration-N/ in --workspace and the "
                             "dashboard's latest iteration (if SKILL_DASHBOARD_URL "
                             "is set), then incremented by 1.")
-        p.add_argument("--evals-json", default=None)
+        p.add_argument("--evals-json", required=True,
+                       help="Path to evals.json (typically <skill-path>-evals/evals.json; "
+                            "scaffold with `better-skills init-evals`).")
         p.add_argument("--baseline", default=None,
                        help="Override default_baseline. Grammar: none | previous | iteration-N | path:/abs/path.")
         p.add_argument("--num-workers", type=int, default=None)
@@ -478,8 +496,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--skill-path", type=Path, default=None,
                     help="Path to the skill directory (for SKILL.md snapshot + git SHA).")
     sp.add_argument("--evals-json", default=None,
-                    help="Path to the evals config used (default: <skill>/evals.json). "
-                         "Required when the file is not named evals.json or lives outside the skill dir.")
+                    help="Path to the evals.json used for this iteration. "
+                         "When set, its contents are included in the dashboard "
+                         "payload as evals_definition; when omitted, the upload "
+                         "still succeeds but skips that snapshot.")
     sp.add_argument("--dashboard-url", default=os.environ.get("SKILL_DASHBOARD_URL"))
     sp.add_argument("--token", default=os.environ.get("SKILL_DASHBOARD_TOKEN"))
     sp.add_argument("--force", action="store_true",

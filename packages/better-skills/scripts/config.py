@@ -1,9 +1,13 @@
 """Configuration models for better-skills evals.
 
-Two config files per skill:
+Two config files per skill, kept in separate directories (skill = shippable
+product, evals = test harness — same pattern as source vs tests in any project):
 
-  <skill>/evals.json     — functional evals (case prompts + baseline declaration)
-  <skill>/triggers.json  — trigger evals (description-triggering tests)
+  <skill>/triggers.json          — trigger evals (description-triggering tests),
+                                   lives inside the skill as product metadata.
+  <evals-dir>/evals.json         — functional evals (case prompts + baseline
+                                   declaration), lives outside the skill;
+                                   conventionally `<skill-path>-evals/`.
 
 Both are loaded and validated through pydantic models, giving precise field-level
 errors when an agent (or human) writes a bad config. Errors point to the JSON
@@ -373,11 +377,6 @@ def load_triggers_config(path: Path) -> TriggersConfig:
         return TriggersConfig.model_validate(raw)
     except ValidationError as e:
         raise ConfigError(_format_validation_error(path, e)) from e
-
-
-def find_evals_config(skill_path: Path) -> Path:
-    """Default path for a skill's evals.json: <skill>/evals.json."""
-    return skill_path / "evals.json"
 
 
 def validate_skill_workspace(skill_path: Path, workspace: Path) -> None:

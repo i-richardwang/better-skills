@@ -11,8 +11,12 @@ iterations.
 pip install better-skills
 
 better-skills --help
-better-skills init <skill-path>
-better-skills iterate --skill-path <skill-path> --workspace <name>-eval
+better-skills init <skill-path>                                          # scaffolds triggers.json inside the skill
+better-skills init-evals <skill-path>-evals --skill-path <skill-path>    # scaffolds evals.json in a sibling dir
+better-skills iterate \
+  --skill-path <skill-path> \
+  --evals-json <skill-path>-evals/evals.json \
+  --workspace <name>-eval
 better-skills view
 ```
 

@@ -2,12 +2,10 @@
 
 Two JSON files describe a skill's evals; both are validated by `scripts/config.py`:
 
-- `evals.json` — functional eval cases + baseline declaration (consumed by `better-skills run/iterate`)
-- `triggers.json` — trigger eval queries (consumed by `better-skills trigger-eval/trigger-loop`)
+- `triggers.json` — trigger eval queries (consumed by `better-skills trigger-eval/trigger-loop`). Lives at `<skill-path>/triggers.json`. Scaffold with `better-skills init <skill-path>`.
+- `evals.json` — functional eval cases + baseline declaration (consumed by `better-skills run/iterate`). Lives outside the skill, conventionally `<skill-path>-evals/evals.json`. Scaffold with `better-skills init-evals <evals-dir> --skill-path <skill-path>`. `--evals-json` is required on `run`/`iterate`.
 
-`better-skills init <skill-path>` scaffolds them at `<skill>/evals.json` and `<skill>/triggers.json` — the simplest layout. They can also live in a sibling harness directory (e.g. `<repo>/evals/<skill-name>/evals.json`) when you want to keep the skill folder clean; pass `--evals-json <path>` to point the CLI at the non-default location.
-
-Relative paths inside `evals.json` (`prompt_file`, `case.files`, `per_run_setup.script`) resolve against evals.json's own directory, not `--skill-path`. Fixtures co-locate with the config they belong to.
+Relative paths inside `evals.json` (`prompt_file`, `case.files`, `per_run_setup.script`) resolve against evals.json's own directory. Fixtures live in the evals directory alongside `evals.json`.
 
 ## evals.json
 

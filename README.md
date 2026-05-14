@@ -8,7 +8,7 @@ A measurement-first workbench for building and iterating on Agent Skills. Instea
 
 The original `anthropics/skills` is a curated catalogue of demonstration skills (docx, pdf, brand assets, etc.). This repo keeps spec compatibility but replaces the catalogue framing with a **build → measure → iterate loop**:
 
-- A single CLI (`better-skills`) owns the whole lifecycle — scaffolding `evals.json`, snapshotting the live skill into `iteration-N/skill-state/` after every run (so the next iteration's `baseline=previous` resolves to the version that was just tested), running parallel evaluations, optimising descriptions for trigger accuracy, and uploading results.
+- A single CLI (`better-skills`) owns the whole lifecycle — scaffolding `triggers.json` inside the skill and `evals.json` in a sibling harness directory, snapshotting the live skill into `iteration-N/skill-state/` after every run (so the next iteration's `baseline=previous` resolves to the version that was just tested), running parallel evaluations, optimising descriptions for trigger accuracy, and uploading results.
 - A pluggable grader / improver layer so eval scoring isn't tied to a single runtime (Claude and OpenCode supported alongside each other).
 - A trajectory dashboard with per-iteration pass-rate diffs, so skill quality becomes a number you can watch move.
 - An updated `SKILL.md` authoring methodology built around the eval loop rather than vibe-coding.
@@ -26,8 +26,12 @@ pip install better-skills
 
 # Now available on PATH:
 better-skills --help
-better-skills init <skill-path>
-better-skills iterate --skill-path <skill-path> --workspace <name>-eval
+better-skills init <skill-path>                                          # scaffolds triggers.json inside the skill
+better-skills init-evals <skill-path>-evals --skill-path <skill-path>    # scaffolds evals.json in a sibling dir
+better-skills iterate \
+  --skill-path <skill-path> \
+  --evals-json <skill-path>-evals/evals.json \
+  --workspace <name>-eval
 better-skills view
 ```
 

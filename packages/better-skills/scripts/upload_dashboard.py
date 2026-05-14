@@ -27,7 +27,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-from .config import ConfigError, find_evals_config, load_evals_config
+from .config import ConfigError, load_evals_config
 
 
 # --- Skill file scanner -----------------------------------------------------
@@ -281,12 +281,10 @@ def build_payload(
         sha = _get_git_sha(skill_path)
         if sha:
             payload["git_commit_sha"] = sha
-        # Prefer the explicit evals_json the runner used; fall back to the
-        # default location so unchanged callers still work.
-        evals_path = evals_json if evals_json is not None else find_evals_config(skill_path)
-        evals_def = _read_evals_definition(evals_path)
-        if evals_def is not None:
-            payload["evals_definition"] = evals_def
+        if evals_json is not None:
+            evals_def = _read_evals_definition(evals_json)
+            if evals_def is not None:
+                payload["evals_definition"] = evals_def
         files, file_warnings = _collect_skill_files(skill_path)
         if files:
             payload["skill_files"] = files
