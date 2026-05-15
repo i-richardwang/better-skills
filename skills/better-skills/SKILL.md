@@ -340,7 +340,7 @@ kill <viewer_pid> 2>/dev/null
 - **Re-aggregate** an existing iteration: `better-skills aggregate <workspace>/iteration-N`. The iteration's `manifest.json` is required.
 - **Manual dashboard upload**: `better-skills upload <workspace>/iteration-N --skill-name <name> --iteration N --skill-path <path>`. Requires `SKILL_DASHBOARD_URL` + `SKILL_DASHBOARD_TOKEN` env or `--dashboard-url`/`--token` flags.
 - **Standalone viewer**: `better-skills view <workspace>/iteration-N` — same as what `iterate` runs in the background.
-- **Trigger pipeline** (test description triggering): `better-skills trigger-loop --skill-path <path>` runs eval+improve loop. Underlying subcommands `trigger-eval` and `trigger-improve` are also exposed.
+- **Trigger pipeline** (test description triggering): `better-skills trigger-loop --skill-path <path> --triggers-json <path>-evals/triggers.json` runs the eval+improve loop. Underlying subcommands `trigger-eval` and `trigger-improve` are also exposed.
 
 The `manifest.json` schema and `run_status.json` lifecycle are documented in `references/manifest-schema.md`. The new `evals.json` schema is in `references/evals-schema.md`.
 
