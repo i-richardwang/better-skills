@@ -16,7 +16,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from .config import find_triggers_config, load_triggers_config
+from .config import load_triggers_config
 from .generate_report import generate_html
 from .improve_description import improve_description
 from .run_eval import find_project_root, run_eval
@@ -257,10 +257,7 @@ def run_from_cli(args: argparse.Namespace) -> dict:
     if not (skill_path / "SKILL.md").exists():
         raise FileNotFoundError(f"No SKILL.md found at {skill_path}")
 
-    triggers_json = (
-        Path(args.triggers_json).resolve() if args.triggers_json
-        else find_triggers_config(skill_path).resolve()
-    )
+    triggers_json = Path(args.triggers_json).resolve()
     cfg = load_triggers_config(triggers_json)
     eval_set = [q.model_dump() for q in cfg.queries]
 

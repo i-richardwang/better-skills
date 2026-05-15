@@ -258,7 +258,7 @@ Please respond with only the new description text in <new_description> tags, not
 
 def run_from_cli(args: argparse.Namespace) -> dict:
     """Entry point used by `scripts.cli trigger-improve`."""
-    from .config import find_triggers_config, load_triggers_config
+    from .config import load_triggers_config
 
     skill_path = Path(args.skill_path).resolve()
     if not (skill_path / "SKILL.md").exists():
@@ -269,14 +269,7 @@ def run_from_cli(args: argparse.Namespace) -> dict:
     if args.history:
         history = json.loads(Path(args.history).read_text())
 
-    # Load triggers.json so we can pick up improver_executor / improver_model;
-    # fall back to defaults if the file is absent (e.g. ad-hoc improver runs).
-    cfg = None
-    try:
-        triggers_json = find_triggers_config(skill_path)
-        cfg = load_triggers_config(triggers_json)
-    except FileNotFoundError:
-        pass
+    cfg = load_triggers_config(Path(args.triggers_json).resolve()) if args.triggers_json else None
 
     name, _, content = parse_skill_md(skill_path)
     current_description = eval_results["description"]

@@ -142,7 +142,7 @@ Try to explain to the model why things are important in lieu of heavy-handed mus
 
 After writing the skill draft, come up with 2-3 realistic test prompts — the kind of thing a real user would actually say. Share them with the user: [you don't have to use this exact language] "Here are a few test cases I'd like to try. Do these look right, or do you want to add more?" Then run them.
 
-Save test cases to `evals.json`. Scaffold one with `better-skills init-evals <evals-dir> --skill-path <skill-path>` — pick `<evals-dir>` outside the skill (typically `<skill-path>-evals/`). Don't write assertions yet — just the prompts. You'll draft assertions in the next step while the runs are in progress.
+Save test cases to `evals.json`. Scaffold one with `better-skills init <evals-dir> --skill-path <skill-path>` — pick `<evals-dir>` outside the skill (typically `<skill-path>-evals/`). The same command also writes `triggers.json` next to it. Don't write assertions yet — just the prompts. You'll draft assertions in the next step while the runs are in progress.
 
 ```json
 {
@@ -197,7 +197,7 @@ Every iteration runs each case under exactly two configurations: `current` (the 
 
 The `better-skills` CLI exposes one subcommand per pipeline stage. `iterate` is the default — it runs all executors + graders in parallel, writes a per-iteration manifest, dumps the live skill into `iteration-N/skill-state/` for future-iteration comparisons, aggregates into `benchmark.json`/`benchmark.md`, and launches the viewer in the background — all from one command.
 
-Before launching, ensure your `evals.json` exists with `defaults` + `cases` (scaffold with `better-skills init-evals`; full schema in `references/evals-schema.md`). `--workspace` is a separate directory for iteration outputs — a sibling like `<skill-name>-workspace/` is conventional.
+Before launching, ensure your `evals.json` exists with `defaults` + `cases` (scaffold with `better-skills init`; full schema in `references/evals-schema.md`). `--workspace` is a separate directory for iteration outputs — a sibling like `<skill-name>-workspace/` is conventional.
 
 **Invocation** — launch as a **background Bash tool call** (`run_in_background: true`) so you can draft assertions while it runs:
 
@@ -219,7 +219,7 @@ The runner auto-snapshots the live skill into `iteration-N/skill-state/` at iter
 **Executor and grader runtimes** are configured in `evals.json` (`executor`, `grader_executor`, `default_model`, `grader_model`). Default is Claude for both; switch to `opencode` when the user only has OpenCode access. See `references/evals-schema.md` for the schema.
 
 **Common CLI flags** (all override `evals.json` defaults):
-- `--evals-json <path>` — **required**; the evals.json scaffolded by `init-evals`
+- `--evals-json <path>` — **required**; the evals.json scaffolded by `init`
 - `--num-workers N` — parallelism
 - `--default-timeout SEC` — per-run ceiling; per-case override via a `timeout_s` field in evals.json
 - `--baseline <spec>` — override `default_baseline` from evals.json (`none | previous | iteration-N | path:/abs`)
@@ -334,8 +334,7 @@ kill <viewer_pid> 2>/dev/null
 
 `iterate` is a thin orchestrator over `better-skills`'s other subcommands. They stay supported for finer control:
 
-- **Scaffold triggers**: `better-skills init <skill-path>` — writes `triggers.json` into the skill directory.
-- **Scaffold evals**: `better-skills init-evals <evals-dir> --skill-path <skill-path>` — writes `evals.json` into `<evals-dir>` (conventionally `<skill-path>-evals/`).
+- **Scaffold the eval harness**: `better-skills init <evals-dir> --skill-path <skill-path>` — writes `evals.json` and `triggers.json` into `<evals-dir>` (conventionally `<skill-path>-evals/`).
 - **Just re-run the executor**: `better-skills iterate --skill-path … --workspace … --iteration N --phase executor`. Use `--resume` to skip runs whose transcript already shows success.
 - **Just re-grade** without re-executing (e.g., after editing assertions): `better-skills iterate … --phase grader --resume`. Already-graded runs are skipped.
 - **Re-aggregate** an existing iteration: `better-skills aggregate <workspace>/iteration-N`. The iteration's `manifest.json` is required.
@@ -438,7 +437,7 @@ Save the eval set to the workspace, then run in the background:
 
 ```bash
 better-skills trigger-loop \
-  --triggers-json <path-to-trigger-eval.json> \
+  --triggers-json <path-to-skill>-evals/triggers.json \
   --skill-path <path-to-skill> \
   --model <model-id-powering-this-session> \
   --max-iterations 5 \

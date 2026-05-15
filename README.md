@@ -26,8 +26,7 @@ pip install better-skills
 
 # Now available on PATH:
 better-skills --help
-better-skills init <skill-path>                                          # scaffolds triggers.json inside the skill
-better-skills init-evals <skill-path>-evals --skill-path <skill-path>    # scaffolds evals.json in a sibling dir
+better-skills init <skill-path>-evals --skill-path <skill-path>    # scaffolds evals.json + triggers.json
 better-skills iterate \
   --skill-path <skill-path> \
   --evals-json <skill-path>-evals/evals.json \

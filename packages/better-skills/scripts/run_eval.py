@@ -17,7 +17,7 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from .config import find_triggers_config, load_triggers_config
+from .config import load_triggers_config
 from .run_functional_eval import EXECUTOR_CLAUDE, EXECUTOR_OPENCODE
 from .utils import parse_skill_md
 
@@ -415,10 +415,7 @@ def run_from_cli(args: argparse.Namespace) -> dict:
     if not (skill_path / "SKILL.md").exists():
         raise FileNotFoundError(f"No SKILL.md found at {skill_path}")
 
-    triggers_json = (
-        Path(args.triggers_json).resolve() if args.triggers_json
-        else find_triggers_config(skill_path).resolve()
-    )
+    triggers_json = Path(args.triggers_json).resolve()
     cfg = load_triggers_config(triggers_json)
     eval_set = [q.model_dump() for q in cfg.queries]
 
