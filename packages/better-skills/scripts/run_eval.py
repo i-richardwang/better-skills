@@ -18,6 +18,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from .config import load_triggers_config
+from .executor_opencode import cleanup_opencode_db, pin_throwaway_opencode_db
 from .run_functional_eval import EXECUTOR_CLAUDE, EXECUTOR_OPENCODE
 from .utils import parse_skill_md
 
@@ -240,6 +241,7 @@ def _run_single_query_opencode(
     cmd.append(query)
 
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    own_db = pin_throwaway_opencode_db(env)
 
     process = subprocess.Popen(
         cmd,
@@ -284,6 +286,7 @@ def _run_single_query_opencode(
         if process.poll() is None:
             process.kill()
             process.wait()
+        cleanup_opencode_db(own_db)
 
     # Final drain after the process exits naturally — there may be a tail
     # of buffered events we haven't scanned yet.

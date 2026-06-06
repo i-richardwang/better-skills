@@ -16,7 +16,40 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
+from uuid import uuid4
+
+
+def pin_throwaway_opencode_db(env: dict) -> Path | None:
+    """Point opencode's session SQLite at a throwaway per-call DB.
+
+    opencode (~1.16+) funnels every session into one global SQLite
+    (~/.local/share/opencode/opencode.db, WAL + 5s busy_timeout, single writer).
+    Parallel eval subprocesses that share it race on the single-writer lock and
+    die with "database is locked". That store is incidental to us — the
+    transcript is captured from the subprocess stdout and the DB is never read
+    back — so every opencode subprocess gets its own ephemeral DB.
+
+    Mutates `env` in place. Returns the created path (for cleanup), or None when
+    the caller already pinned OPENCODE_DB (then we leave it untouched).
+    """
+    if "OPENCODE_DB" in env:
+        return None
+    db = Path(tempfile.gettempdir()) / f"opencode-eval-{uuid4().hex}.db"
+    env["OPENCODE_DB"] = str(db)
+    return db
+
+
+def cleanup_opencode_db(db: Path | None) -> None:
+    """Delete a throwaway DB from pin_throwaway_opencode_db (and its WAL/SHM)."""
+    if db is None:
+        return
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            Path(str(db) + suffix).unlink()
+        except FileNotFoundError:
+            pass
 
 
 def build_opencode_cmd(
@@ -75,22 +108,26 @@ def run_opencode(
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
     if env_overrides:
         env.update(env_overrides)
+    own_db = pin_throwaway_opencode_db(env)
 
     cwd.mkdir(parents=True, exist_ok=True)
-    with open(transcript_path, "w") as tfile, open(stderr_path, "w") as efile:
-        try:
-            result = subprocess.run(
-                cmd,
-                stdout=tfile,
-                stderr=efile,
-                text=True,
-                cwd=str(cwd),
-                env=env,
-                timeout=timeout,
-            )
-            return result.returncode, False
-        except subprocess.TimeoutExpired:
-            return -1, True
+    try:
+        with open(transcript_path, "w") as tfile, open(stderr_path, "w") as efile:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=tfile,
+                    stderr=efile,
+                    text=True,
+                    cwd=str(cwd),
+                    env=env,
+                    timeout=timeout,
+                )
+                return result.returncode, False
+            except subprocess.TimeoutExpired:
+                return -1, True
+    finally:
+        cleanup_opencode_db(own_db)
 
 
 def parse_opencode_final_event(transcript_path: Path) -> dict:

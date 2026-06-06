@@ -17,6 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .executor_opencode import cleanup_opencode_db, pin_throwaway_opencode_db
 from .run_functional_eval import EXECUTOR_CLAUDE, EXECUTOR_OPENCODE
 from .utils import parse_skill_md
 
@@ -66,14 +67,18 @@ def _call_opencode(prompt: str, model: str | None, timeout: int) -> str:
     cmd.append(prompt)
 
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    own_db = pin_throwaway_opencode_db(env)
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=timeout,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+        )
+    finally:
+        cleanup_opencode_db(own_db)
     if result.returncode != 0:
         raise RuntimeError(
             f"opencode run exited {result.returncode}\nstderr: {result.stderr}"
