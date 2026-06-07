@@ -80,7 +80,7 @@ Keep the bar high. The goal is to flag things the eval author would say "good ca
 
 ### Step 7: Write Grading Results
 
-Save results to `{outputs_dir}/../grading.json` (sibling to outputs_dir).
+Save the grading results to the absolute path provided after `Write grading.json to:`.
 
 ## Grading Criteria
 
