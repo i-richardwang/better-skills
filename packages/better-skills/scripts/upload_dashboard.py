@@ -327,6 +327,9 @@ def upload(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
+            # Cloudflare WAF blocks the default "Python-urllib/*" UA (403, error 1010).
+            # Send an explicit non-library UA so the request reaches the app.
+            "User-Agent": "better-skills-uploader/1.0",
         },
     )
     try:
@@ -364,7 +367,11 @@ def fetch_latest_iteration(
     req = urllib.request.Request(
         url,
         method="GET",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            # See upload(): Cloudflare blocks the default Python-urllib UA.
+            "User-Agent": "better-skills-uploader/1.0",
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
